@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: expense-tracker-bot
+    env: python
+    buildCommand: "./build.sh"
+    startCommand: "gunicorn main.wsgi:application"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
