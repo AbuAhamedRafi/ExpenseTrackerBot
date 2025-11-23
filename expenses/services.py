@@ -189,7 +189,7 @@ def ask_gemini(text):
 
     # Initialize model with tools
     model = genai.GenerativeModel(
-        "gemini-2.0-flash-exp",
+        "gemini-2.0-flash",
         tools=[expense_tool],
         system_instruction=f"""You are a friendly, conversational expense tracking assistant.
 Be natural, use emojis occasionally, show personality, but stay helpful.
