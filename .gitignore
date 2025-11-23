@@ -11,6 +11,7 @@ db.sqlite3-journal
 
 # Environment variables
 .env
+venv/
 
 # Google Credentials
 credentials.json
