@@ -4,5 +4,6 @@ google-generativeai
 gspread
 oauth2client
 python-dotenv
+python-dateutil
 gunicorn
 requests

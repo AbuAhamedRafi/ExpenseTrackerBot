@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.conf import settings
-from .services import ask_gemini, add_to_sheet
+from .services import ask_gemini, process_transaction
 
 
 class TelegramWebhookView(APIView):
@@ -39,18 +39,37 @@ class TelegramWebhookView(APIView):
             # Process with Gemini
             gemini_response = ask_gemini(text)
 
-            if gemini_response["type"] == "expense":
-                # It's an expense, save to sheet
-                sheet_result = add_to_sheet(gemini_response["data"], text)
+            if gemini_response["type"] in ["expense", "income"]:
+                # It's an expense or income, save to Notion
+                result = process_transaction(gemini_response)
 
-                if sheet_result["success"]:
-                    reply_text = (
-                        f"✅ Saved {len(gemini_response['data'])} expense(s).\n"
-                    )
+                if result["success"]:
+                    type_label = "expense(s)" if gemini_response["type"] == "expense" else "income entry(s)"
+                    reply_text = f"✅ Saved {result['count']} {type_label}.\n"
+                    
                     for item in gemini_response["data"]:
-                        reply_text += f"- {item.get('item')} ({item.get('amount')})\n"
+                        name = item.get("item") or item.get("source")
+                        reply_text += f"- {name} ({item.get('amount')})\n"
+                    
+                    # Add budget warnings if any
+                    print(f"DEBUG: Result = {result}")  # DEBUG
+                    if result.get("budget_warnings"):
+                        print(f"DEBUG: Found warnings: {result['budget_warnings']}")  # DEBUG
+                        reply_text += "\n"
+                        for warning in result["budget_warnings"]:
+                            reply_text += f"{warning}\n"
+                    else:
+                        print("DEBUG: No budget warnings found")  # DEBUG
+                    
+                    # Add checklist messages if any
+                    if result.get("checklist_messages"):
+                        reply_text += "\n"
+                        for msg in result["checklist_messages"]:
+                            reply_text += f"{msg}\n"
+                    
+                    print(f"DEBUG: Sending to Telegram: {reply_text}")  # DEBUG
                 else:
-                    reply_text = f"❌ Failed to save: {sheet_result['message']}"
+                    reply_text = f"❌ Failed to save: {result['message']}"
 
                 self.send_telegram_message(chat_id, reply_text)
 
@@ -60,7 +79,7 @@ class TelegramWebhookView(APIView):
 
             else:
                 # Error
-                self.send_telegram_message(chat_id, gemini_response["text"])
+                self.send_telegram_message(chat_id, gemini_response.get("text", "Unknown error"))
 
             return Response({"status": "success"}, status=status.HTTP_200_OK)
 
