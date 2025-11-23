@@ -39,134 +39,126 @@ class TelegramWebhookView(APIView):
             # Process with Gemini
             gemini_response = ask_gemini(text)
 
-            if gemini_response["type"] == "summary":
-                # User wants expense summary
-                result = process_transaction(gemini_response)
+            # Extract natural message and action
+            natural_message = gemini_response.get("message", "")
+            action = gemini_response.get("action")
 
+            # If no action, just send the conversational response
+            if not action:
+                self.send_telegram_message(chat_id, natural_message)
+                return Response({"status": "success"}, status=status.HTTP_200_OK)
+
+            # Process the action
+            action_type = action.get("type")
+
+            if action_type == "summary":
+                # Send Gemini's initial message
+                self.send_telegram_message(chat_id, natural_message)
+
+                # Fetch and send summary data
+                result = process_transaction(action)
                 if result["success"]:
                     summary = result["data"]
-                    reply_text = f"📊 *Expense Summary for {summary['month']}*\n\n"
-                    reply_text += f"💰 Total Income: ${summary['total_income']:.2f}\n"
-                    reply_text += f"💸 Total Spent: ${summary['total_spent']:.2f}\n"
-                    reply_text += f"💵 Remaining: ${summary['remaining']:.2f}\n\n"
+                    reply_text = f"\n📊 *{summary['month']} Summary*\n\n"
+                    reply_text += f"💰 Income: ${summary['total_income']:.2f}\n"
+                    reply_text += f"💸 Spent: ${summary['total_spent']:.2f}\n"
+                    reply_text += f"💵 Remaining: ${summary['remaining']:.2f}\n"
 
                     if summary["categories"]:
-                        reply_text += "📋 *Category Breakdown:*\n"
+                        reply_text += "\n*By Category:*\n"
                         for cat in summary["categories"]:
                             budget_info = ""
                             if cat["budget"]:
                                 remaining = cat["budget"] - cat["spent"]
                                 percentage = (cat["spent"] / cat["budget"]) * 100
                                 if percentage > 100:
-                                    budget_info = f" (⚠️ ${remaining:.2f} over budget)"
+                                    budget_info = f" ⚠️ ${abs(remaining):.2f} over"
                                 elif percentage >= 90:
-                                    budget_info = f" (⚠️ ${remaining:.2f} remaining, {percentage:.0f}% used)"
+                                    budget_info = f" ⚠️ ${remaining:.2f} left"
                                 else:
-                                    budget_info = f" (${remaining:.2f} remaining)"
-
-                            reply_text += f"• {cat['name']}: ${cat['spent']:.2f}"
-                            if budget_info:
-                                reply_text += budget_info
-                            reply_text += "\n"
-                    else:
-                        reply_text += "No expenses recorded this month.\n"
+                                    budget_info = f" ✓ ${remaining:.2f} left"
+                            reply_text += (
+                                f"• {cat['name']}: ${cat['spent']:.2f}{budget_info}\n"
+                            )
                 else:
-                    reply_text = "❌ Failed to fetch summary."
+                    reply_text = "\n❌ Couldn't fetch the data right now."
 
                 self.send_telegram_message(chat_id, reply_text)
 
-            elif gemini_response["type"] == "budget_check":
-                # User wants to check budget impact
-                result = process_transaction(gemini_response)
+            elif action_type == "budget_check":
+                # Send Gemini's initial message
+                self.send_telegram_message(chat_id, natural_message)
 
+                # Fetch and send budget check
+                result = process_transaction(action)
                 if result["success"]:
                     check = result["data"]
-                    reply_text = (
-                        f"🔍 *Budget Check for {check.get('category', 'Unknown')}*\n\n"
-                    )
+                    reply_text = f"\n*{check.get('category', 'Category')} Budget*\n"
 
-                    if check["status"] == "unknown":
-                        reply_text += check["message"]
-                    elif check["status"] == "no_budget":
-                        reply_text += f"No budget set for this category.\n"
+                    if check["status"] == "no_budget":
                         reply_text += (
-                            f"Current Spending: ${check['current_spent']:.2f}\n"
+                            f"No budget set.\nCurrent: ${check['current_spent']:.2f}\n"
                         )
+                        reply_text += f"After: ${check['projected_spent']:.2f}"
+                    elif check["status"] != "unknown":
+                        reply_text += f"Current: ${check['current_spent']:.2f} / ${check['budget']:.2f}\n"
                         reply_text += (
-                            f"After this expense: ${check['projected_spent']:.2f}"
+                            f"After expense: ${check['projected_spent']:.2f}\n"
                         )
-                    else:
-                        reply_text += (
-                            f"Current Spending: ${check['current_spent']:.2f}\n"
-                        )
-                        reply_text += f"Budget: ${check['budget']:.2f}\n"
-                        reply_text += f"After ${check['projected_spent'] - check['current_spent']:.2f} expense: ${check['projected_spent']:.2f}\n"
-                        reply_text += f"Remaining: ${check['remaining']:.2f}\n"
-                        reply_text += f"Budget Used: {check['percentage']:.1f}%\n\n"
-                        reply_text += check["message"]
+                        reply_text += f"Remaining: ${check['remaining']:.2f} ({check['percentage']:.0f}% used)\n\n"
+
+                        # Natural status message
+                        if check["status"] == "safe":
+                            reply_text += "✅ You're good to go!"
+                        elif check["status"] == "approaching_limit":
+                            reply_text += "⚠️ Getting close to your limit."
+                        elif check["status"] == "close_to_limit":
+                            reply_text += "⚠️ Very close to budget limit!"
+                        else:
+                            reply_text += "🚫 This would put you over budget."
                 else:
-                    reply_text = f"❌ {result.get('message', 'Failed to check budget')}"
+                    reply_text = (
+                        f"\n❌ {result.get('message', 'Error checking budget')}"
+                    )
 
                 self.send_telegram_message(chat_id, reply_text)
 
-            elif gemini_response["type"] in ["expense", "income"]:
-                # It's an expense or income, save to Notion
-                result = process_transaction(gemini_response)
+            elif action_type in ["expense", "income"]:
+                # Process transaction
+                result = process_transaction(action)
 
                 if result["success"]:
-                    type_label = (
-                        "expense(s)"
-                        if gemini_response["type"] == "expense"
-                        else "income entry(s)"
-                    )
+                    # Build success response
+                    reply_text = natural_message
 
-                    # Check if partial success
+                    # Add details for partial success
                     if result.get("partial_success"):
-                        reply_text = f"⚠️ Partial Success: Saved {result['count']} of {result['total_attempted']} {type_label}.\n\n"
-
-                        # List successful saves
-                        reply_text += "✅ Saved:\n"
+                        reply_text += f"\n\n⚠️ Saved {result['count']} of {result['total_attempted']}:\n"
                         for item in result["saved_items"]:
-                            reply_text += f"  • {item['name']} (${item['amount']})\n"
+                            reply_text += f"✅ {item['name']} (${item['amount']})\n"
 
-                        # List failures
-                        reply_text += f"\n❌ Failed ({result['failed_count']}):\n"
+                        reply_text += f"\n❌ Failed {result['failed_count']}:\n"
                         for failure in result["failures"]:
-                            reply_text += f"  • {failure['name']}"
-                            if failure.get("amount"):
-                                reply_text += f" (${failure['amount']})"
-                            reply_text += f"\n    Reason: {failure['reason']}\n"
-                    else:
-                        # Full success
-                        reply_text = f"✅ Saved {result['count']} {type_label}.\n"
-                        for item in result["saved_items"]:
-                            reply_text += f"  • {item['name']} (${item['amount']})\n"
+                            reply_text += f"• {failure['name']}: {failure['reason']}\n"
 
-                    # Add budget warnings if any
+                    # Add budget warnings
                     if result.get("budget_warnings"):
-                        reply_text += "\n⚠️ Budget Alerts:\n"
+                        reply_text += "\n\n⚠️ Budget alerts:\n"
                         for warning in result["budget_warnings"]:
                             reply_text += f"{warning}\n"
 
-                    # Add checklist messages if any
+                    # Add checklist updates
                     if result.get("checklist_messages"):
-                        reply_text += "\n✓ Subscriptions:\n"
-                        for msg in result["checklist_messages"]:
-                            reply_text += f"{msg}\n"
+                        reply_text += "\n✓ "
+                        reply_text += "\n✓ ".join(result["checklist_messages"])
                 else:
-                    reply_text = f"❌ Failed to save: {result['message']}"
+                    reply_text = f"❌ Couldn't save: {result['message']}"
 
                 self.send_telegram_message(chat_id, reply_text)
 
-            elif gemini_response["type"] == "message":
-                # It's just conversation
-                self.send_telegram_message(chat_id, gemini_response["text"])
-
             else:
-                # Error
-                self.send_telegram_message(
-                    chat_id, gemini_response.get("text", "Unknown error")
-                )
+                # Unknown action type, send natural message
+                self.send_telegram_message(chat_id, natural_message)
 
             return Response({"status": "success"}, status=status.HTTP_200_OK)
 
