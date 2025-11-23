@@ -1,8 +1,6 @@
 import os
 import json
-import datetime
 import google.generativeai as genai
-from django.conf import settings
 from .notion_services import add_expense_to_notion, add_income_to_notion, get_all_categories, get_all_accounts
 
 # Configure Gemini

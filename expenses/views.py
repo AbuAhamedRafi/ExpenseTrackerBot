@@ -52,22 +52,16 @@ class TelegramWebhookView(APIView):
                         reply_text += f"- {name} ({item.get('amount')})\n"
                     
                     # Add budget warnings if any
-                    print(f"DEBUG: Result = {result}")  # DEBUG
                     if result.get("budget_warnings"):
-                        print(f"DEBUG: Found warnings: {result['budget_warnings']}")  # DEBUG
                         reply_text += "\n"
                         for warning in result["budget_warnings"]:
                             reply_text += f"{warning}\n"
-                    else:
-                        print("DEBUG: No budget warnings found")  # DEBUG
                     
                     # Add checklist messages if any
                     if result.get("checklist_messages"):
                         reply_text += "\n"
                         for msg in result["checklist_messages"]:
                             reply_text += f"{msg}\n"
-                    
-                    print(f"DEBUG: Sending to Telegram: {reply_text}")  # DEBUG
                 else:
                     reply_text = f"❌ Failed to save: {result['message']}"
 
