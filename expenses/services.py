@@ -2,10 +2,15 @@ import os
 import json
 import time
 import google.generativeai as genai
+from google.generativeai.types import FunctionDeclaration, Tool
 
 from .notion_client import get_database_id, get_all_page_names
 from .transaction_manager import add_expense, add_income
-from .budget_tracker import get_monthly_summary, check_budget_impact
+from .budget_tracker import (
+    get_monthly_summary,
+    check_budget_impact,
+    get_unpaid_subscriptions,
+)
 
 # Configure Gemini
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
@@ -67,141 +72,234 @@ def get_cached_categories_and_accounts():
 
 def ask_gemini(text):
     """
-    Sends text to Gemini and returns structured data for actions + natural response.
-    Uses Gemini 2.0 Flash's conversational abilities while maintaining structured output.
+    Sends text to Gemini with function calling capabilities.
+    Gemini decides which functions to call based on user intent.
     """
-    model = genai.GenerativeModel("gemini-2.0-flash")
-
-    # Get cached data (budget checks still use real-time data)
+    # Get cached data
     categories, accounts = get_cached_categories_and_accounts()
-
     categories_list = ", ".join([f'"{cat}"' for cat in categories])
     accounts_list = ", ".join([f'"{acc}"' for acc in accounts])
 
-    system_instruction = f"""
-    You are a friendly, conversational expense tracking assistant helping manage finances through Notion.
-    Be natural, use emojis occasionally, show personality, but stay helpful and concise.
+    # Define available functions for Gemini
+    save_expense_func = FunctionDeclaration(
+        name="save_expense",
+        description="Save one or more expenses to Notion database",
+        parameters={
+            "type": "object",
+            "properties": {
+                "expenses": {
+                    "type": "array",
+                    "description": "List of expenses to save",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "item": {
+                                "type": "string",
+                                "description": "Expense description",
+                            },
+                            "amount": {"type": "number", "description": "Amount spent"},
+                            "category": {
+                                "type": "string",
+                                "description": f"Category from: {categories_list}",
+                            },
+                            "account": {
+                                "type": "string",
+                                "description": f"Account from: {accounts_list}",
+                            },
+                        },
+                        "required": ["item", "amount", "category"],
+                    },
+                }
+            },
+            "required": ["expenses"],
+        },
+    )
 
-    AVAILABLE CATEGORIES: {categories_list}
-    AVAILABLE ACCOUNTS: {accounts_list}
+    save_income_func = FunctionDeclaration(
+        name="save_income",
+        description="Save income entry to Notion database",
+        parameters={
+            "type": "object",
+            "properties": {
+                "income_entries": {
+                    "type": "array",
+                    "description": "List of income entries",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "source": {
+                                "type": "string",
+                                "description": "Income source",
+                            },
+                            "amount": {
+                                "type": "number",
+                                "description": "Income amount",
+                            },
+                            "account": {
+                                "type": "string",
+                                "description": f"Account from: {accounts_list}",
+                            },
+                        },
+                        "required": ["source", "amount"],
+                    },
+                }
+            },
+            "required": ["income_entries"],
+        },
+    )
 
-    YOUR JOB:
-    1. Understand what the user wants (log expense, check budget, chat, etc.)
-    2. Provide a NATURAL, CONVERSATIONAL response
-    3. Include structured action data when needed
+    get_summary_func = FunctionDeclaration(
+        name="get_monthly_summary",
+        description="Get comprehensive spending summary for current month with category breakdown and budget status",
+        parameters={"type": "object", "properties": {}},
+    )
 
-    OUTPUT FORMAT:
-    Always return a JSON with:
-    - "message": Your natural, friendly response to the user
-    - "action": The structured data for backend processing (can be null for pure conversation)
+    check_budget_func = FunctionDeclaration(
+        name="check_budget_impact",
+        description="Check if a hypothetical expense would fit within category budget",
+        parameters={
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "description": "Category name"},
+                "amount": {
+                    "type": "number",
+                    "description": "Hypothetical expense amount",
+                },
+            },
+            "required": ["category", "amount"],
+        },
+    )
 
-    RESPONSE EXAMPLES:
+    get_unpaid_func = FunctionDeclaration(
+        name="get_unpaid_subscriptions",
+        description="Get list of fixed expenses or subscriptions that haven't been paid this month",
+        parameters={"type": "object", "properties": {}},
+    )
 
-    User: "Paid 200 for lunch"
-    {{
-      "message": "Got it! 🍽️ Saved your lunch expense of $200. Enjoy your meal!",
-      "action": {{
-        "type": "expense",
-        "data": [{{"item": "Lunch", "amount": 200, "category": "Food", "account": "BRAC Bank Salary Account"}}]
-      }}
-    }}
-
-    User: "Bought bike 200, youtube premium 330, paid utilities 300"
-    {{
-      "message": "Nice! I'm logging these 3 expenses for you - bike, YouTube premium, and utilities. Let me save them! 💾",
-      "action": {{
-        "type": "expense",
-        "data": [
-          {{"item": "Bike", "amount": 200, "category": "Transportation", "account": "BRAC Bank Salary Account"}},
-          {{"item": "YouTube Premium", "amount": 330, "category": "Entertainment", "account": "BRAC Bank Salary Account"}},
-          {{"item": "Utilities", "amount": 300, "category": "Utilities (Bill)", "account": "BRAC Bank Salary Account"}}
+    # Create tool with all functions
+    expense_tool = Tool(
+        function_declarations=[
+            save_expense_func,
+            save_income_func,
+            get_summary_func,
+            check_budget_func,
+            get_unpaid_func,
         ]
-      }}
-    }}
+    )
 
-    User: "Salary credited 50000"
-    {{
-      "message": "Awesome! 💰 Your salary of $50,000 has been logged. Great way to start the month!",
-      "action": {{
-        "type": "income",
-        "data": [{{"source": "Salary", "amount": 50000, "account": "BRAC Bank Salary Account"}}]
-      }}
-    }}
+    # Initialize model with tools
+    model = genai.GenerativeModel(
+        "gemini-2.0-flash-exp",
+        tools=[expense_tool],
+        system_instruction=f"""You are a friendly, conversational expense tracking assistant.
+Be natural, use emojis occasionally, show personality, but stay helpful.
 
-    User: "Show my expenses" or "How much did I spend?"
-    {{
-      "message": "Let me pull up your expense summary! 📊",
-      "action": {{
-        "type": "summary"
-      }}
-    }}
+AVAILABLE CATEGORIES: {categories_list}
+AVAILABLE ACCOUNTS: {accounts_list}
 
-    User: "Can I afford a 500 dollar phone?" or "Will I go over budget if I buy 300 worth of food?"
-    {{
-      "message": "Let me check your budget for that! 🤔",
-      "action": {{
-        "type": "budget_check",
-        "data": {{"category": "Shopping", "amount": 500}}
-      }}
-    }}
+When users mention expenses, income, or ask about their finances, call the appropriate function.
+Always provide a natural, conversational response along with function calls.
 
-    User: "Hello" or "How are you?"
-    {{
-      "message": "Hey! 👋 I'm doing great, thanks for asking! Ready to help you track your expenses. What's up?",
-      "action": null
-    }}
+Examples:
+- "Lunch 150" → Call save_expense
+- "Did I forget any fixed expenses?" → Call get_unpaid_subscriptions
+- "Show my expenses" → Call get_monthly_summary
+- "Can I afford a 500 dollar phone?" → Call check_budget_impact
+- "Salary 50000" → Call save_income
 
-    User: "Thanks!" or "Great!"
-    {{
-      "message": "You're welcome! 😊 Anytime you need help with your finances, I'm here!",
-      "action": null
-    }}
-
-    CATEGORY MATCHING RULES:
-    - Food items (lunch, dinner, snacks, coffee, etc.) → "Food"
-    - Transportation (taxi, uber, bus, bike, fuel) → "Transportation"
-    - Clothes, shoes, gadgets → "Shopping"
-    - Movies, games, subscriptions (Netflix, YouTube) → "Entertainment"
-    - Doctor visits, medicine → "Health"
-    - Rent, mortgage → "Housing(rent)"
-    - Electricity, water, internet → "Utilities (Bill)"
-    - Courses, books → "Education"
-    - If unsure → "Misc"
-
-    IMPORTANT:
-    - Keep "message" natural and conversational (like texting a friend)
-    - Use emojis sparingly but appropriately
-    - Be encouraging about good financial habits
-    - For expenses, acknowledge what they bought
-    - Don't use markdown formatting in the message
-    - Match categories from the AVAILABLE CATEGORIES list exactly
-    """
-
-    prompt = f"{system_instruction}\n\nUser Message: {text}"
+For casual conversation (greetings, thanks), just respond naturally without calling functions.""",
+    )
 
     try:
-        response = model.generate_content(prompt)
-        content = response.text.strip()
+        response = model.generate_content(text)
 
-        # Clean and parse JSON
-        clean_content = content.replace("```json", "").replace("```", "").strip()
+        # Check if Gemini wants to call functions
+        function_calls = []
+        natural_response = ""
 
-        try:
-            data = json.loads(clean_content)
+        for part in response.parts:
+            if part.function_call:
+                function_calls.append(
+                    {
+                        "name": part.function_call.name,
+                        "args": dict(part.function_call.args),
+                    }
+                )
+            elif part.text:
+                natural_response += part.text
 
-            # Validate response structure
-            if "message" not in data:
-                data["message"] = "Got it! Let me process that for you."
-
-            # Return structured response
-            return data
-
-        except json.JSONDecodeError:
-            # Fallback: treat entire response as conversation
-            return {"message": content, "action": None}
+        # Return structured response
+        return {
+            "message": natural_response or "Let me help you with that!",
+            "function_calls": function_calls if function_calls else None,
+        }
 
     except Exception as e:
-        return {"message": f"Oops! Something went wrong: {str(e)}", "action": None}
+        return {
+            "message": f"Oops! Something went wrong: {str(e)}",
+            "function_calls": None,
+        }
+
+
+def execute_function_calls(function_calls):
+    """
+    Execute function calls from Gemini and return results.
+
+    Args:
+        function_calls: List of function calls from Gemini
+
+    Returns:
+        Dict with execution results
+    """
+    results = []
+
+    for call in function_calls:
+        func_name = call["name"]
+        args = call["args"]
+
+        try:
+            if func_name == "save_expense":
+                # Convert to old format for compatibility
+                transaction_data = {"type": "expense", "data": args["expenses"]}
+                result = process_transaction(transaction_data)
+                results.append({"function": func_name, "result": result})
+
+            elif func_name == "save_income":
+                # Convert to old format
+                transaction_data = {"type": "income", "data": args["income_entries"]}
+                result = process_transaction(transaction_data)
+                results.append({"function": func_name, "result": result})
+
+            elif func_name == "get_monthly_summary":
+                summary = get_monthly_summary()
+                results.append(
+                    {
+                        "function": func_name,
+                        "result": {"success": True, "data": summary},
+                    }
+                )
+
+            elif func_name == "check_budget_impact":
+                check_result = check_budget_impact(args["category"], args["amount"])
+                results.append(
+                    {
+                        "function": func_name,
+                        "result": {"success": True, "data": check_result},
+                    }
+                )
+
+            elif func_name == "get_unpaid_subscriptions":
+                unpaid = get_unpaid_subscriptions()
+                results.append(
+                    {"function": func_name, "result": {"success": True, "data": unpaid}}
+                )
+
+        except Exception as e:
+            results.append(
+                {"function": func_name, "result": {"success": False, "error": str(e)}}
+            )
+
+    return results
 
 
 def _validate_category(category_name, item_label):
