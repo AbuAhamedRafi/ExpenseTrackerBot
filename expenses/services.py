@@ -2,12 +2,10 @@ import os
 import json
 import time
 import google.generativeai as genai
-from .notion_services import (
-    add_expense_to_notion,
-    add_income_to_notion,
-    get_all_categories,
-    get_all_accounts,
-)
+
+from .notion_client import get_database_id, get_all_page_names
+from .transaction_manager import add_expense, add_income
+from .budget_tracker import get_monthly_summary, check_budget_impact
 
 # Configure Gemini
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
@@ -17,7 +15,7 @@ _cache = {
     "categories": {"data": None, "timestamp": 0},
     "accounts": {"data": None, "timestamp": 0},
 }
-CACHE_DURATION = 3600  # 1 hour in seconds
+CACHE_DURATION = 3600
 
 
 def get_cached_categories_and_accounts():
@@ -33,9 +31,10 @@ def get_cached_categories_and_accounts():
         or (current_time - _cache["categories"]["timestamp"]) > CACHE_DURATION
     ):
         try:
-            _cache["categories"]["data"] = get_all_categories()
+            category_db_id = get_database_id("categories")
+            _cache["categories"]["data"] = get_all_page_names(category_db_id)
             _cache["categories"]["timestamp"] = current_time
-        except Exception as e:
+        except:
             # Fallback to basic categories if Notion fetch fails
             _cache["categories"]["data"] = [
                 "Food",
@@ -55,9 +54,10 @@ def get_cached_categories_and_accounts():
         or (current_time - _cache["accounts"]["timestamp"]) > CACHE_DURATION
     ):
         try:
-            _cache["accounts"]["data"] = get_all_accounts()
+            account_db_id = get_database_id("accounts")
+            _cache["accounts"]["data"] = get_all_page_names(account_db_id)
             _cache["accounts"]["timestamp"] = current_time
-        except Exception as e:
+        except:
             # Fallback if Notion fetch fails
             _cache["accounts"]["data"] = ["BRAC Bank Salary Account"]
             _cache["accounts"]["timestamp"] = current_time
@@ -177,55 +177,257 @@ def ask_gemini(text):
         return {"type": "message", "text": f"Error processing with Gemini: {str(e)}"}
 
 
+def _validate_category(category_name, item_label):
+    """
+    Validate that a category exists in Notion.
+    Returns (is_valid, error_message)
+    """
+    if not category_name:
+        return False, f"{item_label}: Category is missing"
+
+    try:
+        category_db_id = get_database_id("categories")
+        from .notion_client import find_page_by_name
+
+        cat_page = find_page_by_name(category_db_id, category_name)
+        if not cat_page:
+            return (
+                False,
+                f"{item_label}: Category '{category_name}' not found in Notion",
+            )
+        return True, None
+    except Exception as e:
+        return False, f"{item_label}: Failed to validate category - {str(e)}"
+
+
+def _validate_account(account_name, item_label):
+    """
+    Validate that an account exists in Notion.
+    Returns (is_valid, error_message)
+    """
+    if not account_name:
+        return False, f"{item_label}: Account is missing"
+
+    try:
+        account_db_id = get_database_id("accounts")
+        from .notion_client import find_page_by_name
+
+        acc_page = find_page_by_name(account_db_id, account_name)
+        if not acc_page:
+            return False, f"{item_label}: Account '{account_name}' not found in Notion"
+        return True, None
+    except Exception as e:
+        return False, f"{item_label}: Failed to validate account - {str(e)}"
+
+
 def process_transaction(transaction_data):
     """
-    Processes the parsed data (expense or income) and adds it to Notion.
+    Route transaction data to appropriate handler based on type.
+    Uses partial-success pattern: validates all items, saves valid ones,
+    reports failures clearly.
+
+    This allows "Paid 200 for bike, 330 for youtube, 300 for utils" to
+    save bike and youtube successfully while clearly reporting that utils
+    failed validation. User gets immediate feedback and doesn't need to
+    re-send valid transactions.
     """
-    results = []
+    # Handle summary request
+    if transaction_data["type"] == "summary":
+        summary = get_monthly_summary()
+        return {"success": True, "type": "summary", "data": summary}
+
+    # Handle budget check
+    elif transaction_data["type"] == "budget_check":
+        data = transaction_data.get("data", {})
+        category = data.get("category", "")
+        amount = data.get("amount", 0)
+
+        if not category or not amount:
+            return {
+                "success": False,
+                "message": "Please specify both category and amount.",
+            }
+
+        check_result = check_budget_impact(category, amount)
+        return {"success": True, "type": "budget_check", "data": check_result}
+
+    # PHASE 1: VALIDATE ALL ITEMS AND SEPARATE VALID/INVALID
+    validation_errors = []
+    validated_items = []
+    failed_items = []
 
     if transaction_data["type"] == "expense":
-        for item in transaction_data["data"]:
-            # Validate required fields
+        for idx, item in enumerate(transaction_data["data"], 1):
+            item_name = item.get("item", "Unknown")
+            item_label = f"Expense #{idx} ({item_name})"
+            item_errors = []
+
+            # Validate amount
             amount = item.get("amount")
             if amount is None or amount == 0:
-                results.append(
+                item_errors.append(f"{item_label}: Amount is missing or zero")
+
+            # Validate category
+            category = item.get("category", "")
+            is_valid, error = _validate_category(category, item_label)
+            if not is_valid:
+                item_errors.append(error)
+
+            # Validate account
+            account = item.get("account", "BRAC Bank Salary Account")
+            is_valid_acc, error_acc = _validate_account(account, item_label)
+            if not is_valid_acc:
+                item_errors.append(error_acc)
+
+            # Categorize this item
+            if item_errors:
+                validation_errors.extend(item_errors)
+                failed_items.append(
                     {
-                        "success": False,
-                        "message": "❌ Amount is missing. Please specify an amount (e.g., 'Lunch 150').",
+                        "name": item_name,
+                        "amount": item.get("amount"),
+                        "errors": item_errors,
                     }
                 )
-                continue
-
-            res = add_expense_to_notion(
-                item["item"],
-                item["amount"],
-                item.get("category", ""),
-                item.get("account", "BRAC Bank Salary Account"),
-            )
-            results.append(res)
+            else:
+                validated_items.append(("expense", item))
 
     elif transaction_data["type"] == "income":
-        for item in transaction_data["data"]:
-            res = add_income_to_notion(
-                item["source"],
-                item["amount"],
-                item.get("account", "BRAC Bank Salary Account"),
-            )
-            results.append(res)
+        for idx, item in enumerate(transaction_data["data"], 1):
+            source_name = item.get("source", "Unknown")
+            item_label = f"Income #{idx} ({source_name})"
+            item_errors = []
 
-    # Check if all succeeded
-    if all(r.get("success") for r in results):
-        # Collect budget warnings and checklist messages
-        warnings = [r.get("budget_warning") for r in results if r.get("budget_warning")]
-        checklist_msgs = [
-            r.get("checklist_ticked") for r in results if r.get("checklist_ticked")
-        ]
-        return {
-            "success": True,
-            "count": len(results),
-            "budget_warnings": warnings,
-            "checklist_messages": checklist_msgs,
-        }
-    else:
-        errors = [r.get("message") for r in results if not r.get("success")]
-        return {"success": False, "message": "; ".join(errors)}
+            # Validate amount
+            amount = item.get("amount")
+            if amount is None or amount == 0:
+                item_errors.append(f"{item_label}: Amount is missing or zero")
+
+            # Validate account
+            account = item.get("account", "BRAC Bank Salary Account")
+            is_valid, error = _validate_account(account, item_label)
+            if not is_valid:
+                item_errors.append(error)
+
+            # Categorize this item
+            if item_errors:
+                validation_errors.extend(item_errors)
+                failed_items.append(
+                    {
+                        "name": source_name,
+                        "amount": item.get("amount"),
+                        "errors": item_errors,
+                    }
+                )
+            else:
+                validated_items.append(("income", item))
+
+    # PHASE 2: SAVE ALL VALID ITEMS
+    successful_results = []
+    execution_failures = []
+
+    for trans_type, item in validated_items:
+        try:
+            if trans_type == "expense":
+                res = add_expense(
+                    item["item"],
+                    item["amount"],
+                    item.get("category", ""),
+                    item.get("account", "BRAC Bank Salary Account"),
+                )
+            elif trans_type == "income":
+                res = add_income(
+                    item["source"],
+                    item["amount"],
+                    item.get("account", "BRAC Bank Salary Account"),
+                )
+
+            if res.get("success"):
+                successful_results.append(
+                    {"type": trans_type, "item": item, "result": res}
+                )
+            else:
+                execution_failures.append(
+                    {
+                        "type": trans_type,
+                        "item": item,
+                        "error": res.get("message", "Unknown error"),
+                    }
+                )
+
+        except Exception as e:
+            execution_failures.append(
+                {"type": trans_type, "item": item, "error": str(e)}
+            )
+
+    # PHASE 3: BUILD COMPREHENSIVE RESPONSE
+    total_attempted = len(transaction_data.get("data", []))
+    total_saved = len(successful_results)
+    total_failed = len(failed_items) + len(execution_failures)
+
+    # If nothing succeeded, return failure
+    if total_saved == 0:
+        error_msg = "❌ No transactions were saved.\n\n"
+        if validation_errors:
+            error_msg += "Validation errors:\n" + "\n".join(
+                f"• {err}" for err in validation_errors
+            )
+        if execution_failures:
+            error_msg += "\n\nExecution errors:\n" + "\n".join(
+                f"• {f['item'].get('item') or f['item'].get('source')}: {f['error']}"
+                for f in execution_failures
+            )
+        return {"success": False, "message": error_msg}
+
+    # Build success response with warnings about failures
+    warnings = [
+        r["result"].get("budget_warning")
+        for r in successful_results
+        if r["result"].get("budget_warning")
+    ]
+    checklist_msgs = [
+        r["result"].get("checklist_ticked")
+        for r in successful_results
+        if r["result"].get("checklist_ticked")
+    ]
+
+    response = {
+        "success": True,
+        "count": total_saved,
+        "total_attempted": total_attempted,
+        "budget_warnings": warnings,
+        "checklist_messages": checklist_msgs,
+        "saved_items": [
+            {
+                "name": r["item"].get("item") or r["item"].get("source"),
+                "amount": r["item"].get("amount"),
+            }
+            for r in successful_results
+        ],
+    }
+
+    # Add failure details if any
+    if failed_items or execution_failures:
+        response["partial_success"] = True
+        response["failed_count"] = total_failed
+        response["failures"] = []
+
+        for failed in failed_items:
+            response["failures"].append(
+                {
+                    "name": failed["name"],
+                    "amount": failed.get("amount"),
+                    "reason": "; ".join(failed["errors"]),
+                }
+            )
+
+        for failed in execution_failures:
+            response["failures"].append(
+                {
+                    "name": failed["item"].get("item") or failed["item"].get("source"),
+                    "amount": failed["item"].get("amount"),
+                    "reason": failed["error"],
+                }
+            )
+
+    return response

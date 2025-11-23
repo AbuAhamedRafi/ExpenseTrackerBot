@@ -119,21 +119,38 @@ class TelegramWebhookView(APIView):
                         if gemini_response["type"] == "expense"
                         else "income entry(s)"
                     )
-                    reply_text = f"✅ Saved {result['count']} {type_label}.\n"
 
-                    for item in gemini_response["data"]:
-                        name = item.get("item") or item.get("source")
-                        reply_text += f"- {name} ({item.get('amount')})\n"
+                    # Check if partial success
+                    if result.get("partial_success"):
+                        reply_text = f"⚠️ Partial Success: Saved {result['count']} of {result['total_attempted']} {type_label}.\n\n"
+
+                        # List successful saves
+                        reply_text += "✅ Saved:\n"
+                        for item in result["saved_items"]:
+                            reply_text += f"  • {item['name']} (${item['amount']})\n"
+
+                        # List failures
+                        reply_text += f"\n❌ Failed ({result['failed_count']}):\n"
+                        for failure in result["failures"]:
+                            reply_text += f"  • {failure['name']}"
+                            if failure.get("amount"):
+                                reply_text += f" (${failure['amount']})"
+                            reply_text += f"\n    Reason: {failure['reason']}\n"
+                    else:
+                        # Full success
+                        reply_text = f"✅ Saved {result['count']} {type_label}.\n"
+                        for item in result["saved_items"]:
+                            reply_text += f"  • {item['name']} (${item['amount']})\n"
 
                     # Add budget warnings if any
                     if result.get("budget_warnings"):
-                        reply_text += "\n"
+                        reply_text += "\n⚠️ Budget Alerts:\n"
                         for warning in result["budget_warnings"]:
                             reply_text += f"{warning}\n"
 
                     # Add checklist messages if any
                     if result.get("checklist_messages"):
-                        reply_text += "\n"
+                        reply_text += "\n✓ Subscriptions:\n"
                         for msg in result["checklist_messages"]:
                             reply_text += f"{msg}\n"
                 else:
