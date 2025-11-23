@@ -242,3 +242,36 @@ def check_budget_impact(category_name, additional_amount):
         "remaining": remaining,
         "percentage": percentage,
     }
+
+
+def get_unpaid_subscriptions():
+    """
+    Get list of fixed expenses/subscriptions that haven't been paid this month.
+    Checks the Subscriptions database for unchecked items.
+
+    Returns:
+        Dict containing:
+        - unpaid_count: Number of unpaid items
+        - unpaid_items: List of unpaid subscription names
+    """
+    try:
+        subscriptions_db_id = get_database_id("subscriptions")
+
+        # Query for items where Checkbox is false/empty
+        filter_params = {"property": "Checkbox", "checkbox": {"equals": False}}
+
+        unpaid_subscriptions = query_database(subscriptions_db_id, filter_params)
+
+        unpaid_items = []
+        for sub in unpaid_subscriptions:
+            title_prop = sub.get("properties", {}).get("Name", {})
+            title_list = title_prop.get("title", [])
+
+            if title_list:
+                name = title_list[0].get("text", {}).get("content", "")
+                unpaid_items.append(name)
+
+        return {"unpaid_count": len(unpaid_items), "unpaid_items": unpaid_items}
+
+    except Exception as e:
+        return {"unpaid_count": 0, "unpaid_items": [], "error": str(e)}
