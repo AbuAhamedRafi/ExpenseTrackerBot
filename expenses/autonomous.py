@@ -418,11 +418,24 @@ class SmartExecutor:
     """Executes validated Notion operations with idempotency and retry logic."""
 
     @classmethod
+    def _sanitize_input(cls, data: Any) -> Any:
+        """Convert MapComposite and other Protobuf types to native Python types."""
+        if hasattr(data, "items"):  # MapComposite or dict
+            return {k: cls._sanitize_input(v) for k, v in data.items()}
+        elif isinstance(data, (list, tuple)):  # RepeatedComposite or list
+            return [cls._sanitize_input(item) for item in data]
+        else:
+            return data
+
+    @classmethod
     def execute(cls, operation: Dict, retry_count: int = 0) -> Dict:
         """
         Execute an operation.
         Returns: {"success": bool, "message": str, "data": Any}
         """
+        # Sanitize the entire operation object first
+        operation = cls._sanitize_input(operation)
+
         op_type = operation["operation_type"]
         database = operation["database"]
 
