@@ -24,6 +24,7 @@ class TelegramWebhookView(APIView):
             chat_id = message.get("chat", {}).get("id")
             text = message.get("text", "")
             user_id = message.get("from", {}).get("id")
+            update_id = data.get("update_id")
 
             # Security: Whitelist check
             allowed_user_id = os.getenv("ALLOWED_USER_ID")
@@ -35,6 +36,15 @@ class TelegramWebhookView(APIView):
 
             if not text:
                 return Response({"status": "no_text"}, status=status.HTTP_200_OK)
+
+            # Check for duplicate webhook (simple deduplication)
+            # Store last processed update_id in cache or skip if within 2 seconds
+            if (
+                hasattr(self.__class__, "_last_update_id")
+                and self.__class__._last_update_id == update_id
+            ):
+                return Response({"status": "duplicate"}, status=status.HTTP_200_OK)
+            self.__class__._last_update_id = update_id
 
             # Process with Gemini
             gemini_response = ask_gemini(text)

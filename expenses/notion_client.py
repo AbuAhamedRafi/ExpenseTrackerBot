@@ -5,6 +5,39 @@ Handles authentication, database queries, and page operations.
 
 import os
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+
+# Configure session with connection pooling and retries
+_session = None
+
+
+def get_session():
+    """Get or create a requests session with retry strategy and connection pooling."""
+    global _session
+    if _session is None:
+        _session = requests.Session()
+
+        # Retry strategy for transient failures
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["HEAD", "GET", "POST", "PATCH", "DELETE"],
+        )
+
+        adapter = HTTPAdapter(
+            max_retries=retry_strategy,
+            pool_connections=10,
+            pool_maxsize=20,
+            pool_block=False,
+        )
+
+        _session.mount("https://", adapter)
+        _session.mount("http://", adapter)
+
+    return _session
 
 
 def get_headers():
@@ -51,11 +84,15 @@ def query_database(database_id, filter_params=None):
     url = f"https://api.notion.com/v1/databases/{database_id}/query"
     payload = {"filter": filter_params} if filter_params else {}
 
-    response = requests.post(url, json=payload, headers=get_headers())
+    try:
+        session = get_session()
+        response = session.post(url, json=payload, headers=get_headers(), timeout=25)
 
-    if response.status_code == 200:
-        return response.json().get("results", [])
-    return []
+        if response.status_code == 200:
+            return response.json().get("results", [])
+        return []
+    except requests.exceptions.RequestException:
+        return []
 
 
 def create_page(database_id, properties):
@@ -72,11 +109,17 @@ def create_page(database_id, properties):
     url = "https://api.notion.com/v1/pages"
     payload = {"parent": {"database_id": database_id}, "properties": properties}
 
-    response = requests.post(url, json=payload, headers=get_headers())
+    try:
+        session = get_session()
+        response = session.post(url, json=payload, headers=get_headers(), timeout=25)
 
-    if response.status_code == 200:
-        return True, response.json()
-    return False, response.text
+        if response.status_code == 200:
+            return True, response.json()
+        return False, response.text
+    except requests.exceptions.Timeout:
+        return False, "Notion API request timed out after 25 seconds"
+    except requests.exceptions.RequestException as e:
+        return False, f"Notion API request failed: {str(e)}"
 
 
 def update_page(page_id, properties):
@@ -93,8 +136,12 @@ def update_page(page_id, properties):
     url = f"https://api.notion.com/v1/pages/{page_id}"
     payload = {"properties": properties}
 
-    response = requests.patch(url, json=payload, headers=get_headers())
-    return response.status_code == 200
+    try:
+        session = get_session()
+        response = session.patch(url, json=payload, headers=get_headers(), timeout=25)
+        return response.status_code == 200
+    except requests.exceptions.RequestException:
+        return False
 
 
 def find_page_by_name(database_id, name_value):
