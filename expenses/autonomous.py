@@ -422,7 +422,9 @@ class SmartExecutor:
         """Convert MapComposite and other Protobuf types to native Python types."""
         if hasattr(data, "items"):  # MapComposite or dict
             return {k: cls._sanitize_input(v) for k, v in data.items()}
-        elif isinstance(data, (list, tuple)):  # RepeatedComposite or list
+        elif isinstance(data, str) or isinstance(data, bytes):
+            return data
+        elif hasattr(data, "__iter__"):  # RepeatedComposite, list, tuple
             return [cls._sanitize_input(item) for item in data]
         else:
             return data
