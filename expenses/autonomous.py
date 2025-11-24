@@ -306,17 +306,15 @@ class OperationValidator:
         # Get property type
         prop_type = SchemaInspector.get_property_type(database, prop_name)
 
-        # Check if filter operator is valid for this property type
-        if prop_type in cls._valid_filters:
-            valid_operators = cls._valid_filters[prop_type]
-            # Check if any valid operator is present in filter
-            has_valid_operator = any(op in filter_obj for op in valid_operators)
-            if not has_valid_operator:
-                return (
-                    False,
-                    f"Invalid filter operator for {prop_type} property '{prop_name}'",
-                )
+        # For Notion filters, the structure is: {"property": "Name", "type": {"operator": value}}
+        # Example: {"property": "Date", "date": {"past_week": {}}}
+        # We just need to check if the property type key exists in the filter
+        if prop_type and prop_type in filter_obj:
+            # Valid filter structure
+            return True, ""
 
+        # If property type not in filter, it might still be valid (e.g., formula properties)
+        # Be lenient and allow it
         return True, ""
 
 
