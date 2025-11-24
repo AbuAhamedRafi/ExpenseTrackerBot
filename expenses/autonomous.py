@@ -502,6 +502,10 @@ class SmartExecutor:
         if not db_id:
             return {"success": False, "message": f"Database '{database}' not found"}
 
+        # Resolve relation names to IDs in filters
+        if filters:
+            filters = cls._resolve_filters(filters)
+
         results = query_database(db_id, filters if filters else None)
 
         # Format results for Gemini
@@ -512,6 +516,62 @@ class SmartExecutor:
             "message": f"Found {len(results)} results",
             "data": formatted_results,
         }
+
+    @classmethod
+    def _resolve_filters(cls, filters: Dict) -> Dict:
+        """Recursively resolve relation names to IDs in filters."""
+        if not filters:
+            return filters
+
+        resolved = filters.copy()
+
+        # Handle compound filters (and/or)
+        if "and" in resolved:
+            resolved["and"] = [cls._resolve_filters(f) for f in resolved["and"]]
+        if "or" in resolved:
+            resolved["or"] = [cls._resolve_filters(f) for f in resolved["or"]]
+
+        # Handle property filters
+        if "property" in resolved:
+            prop_name = resolved["property"]
+
+            # Check if this is a relation property we know
+            relation_map = {
+                "Categories": "categories",
+                "Accounts": "accounts",
+                "Category": "categories",
+                "Account": "accounts",
+                "From Account": "accounts",
+                "To Account": "accounts",
+                "Payment Account": "accounts",
+            }
+
+            target_db = relation_map.get(prop_name)
+            if target_db:
+                # This is a relation filter. Check if it's using a text/select filter type
+                # Notion requires "relation": {"contains": "id"}
+                # But Gemini might send "select": {"equals": "Name"} or "rich_text": ...
+
+                # Extract the value to search for
+                search_value = None
+                if "select" in resolved and "equals" in resolved["select"]:
+                    search_value = resolved["select"]["equals"]
+                elif "rich_text" in resolved and "contains" in resolved["rich_text"]:
+                    search_value = resolved["rich_text"]["contains"]
+                elif "rich_text" in resolved and "equals" in resolved["rich_text"]:
+                    search_value = resolved["rich_text"]["equals"]
+
+                if search_value:
+                    # Resolve name to ID
+                    page_id = cls._resolve_relation_id(prop_name, search_value)
+                    if page_id:
+                        # Replace with valid relation filter
+                        return {
+                            "property": prop_name,
+                            "relation": {"contains": page_id},
+                        }
+
+        return resolved
 
     @classmethod
     def _handle_create(cls, database: str, data: Dict) -> Dict:
