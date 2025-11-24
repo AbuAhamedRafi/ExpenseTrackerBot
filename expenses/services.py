@@ -5,17 +5,6 @@ import google.generativeai as genai
 from google.generativeai.types import FunctionDeclaration, Tool
 
 from .notion_client import get_database_id, get_all_page_names
-from .transaction_manager import (
-    add_expense,
-    add_income,
-    delete_last_expense,
-    delete_last_income,
-)
-from .budget_tracker import (
-    get_monthly_summary,
-    check_budget_impact,
-    get_unpaid_subscriptions,
-)
 
 # Configure Gemini
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
@@ -77,156 +66,199 @@ def get_cached_categories_and_accounts():
 
 def ask_gemini(text):
     """
-    Sends text to Gemini with function calling capabilities.
-    Gemini decides which functions to call based on user intent.
+    Sends text to Gemini with autonomous operation capabilities.
+    Gemini can perform ANY Notion operation using the autonomous_operation function.
     """
     # Get cached data
     categories, accounts = get_cached_categories_and_accounts()
     categories_list = ", ".join([f'"{cat}"' for cat in categories])
     accounts_list = ", ".join([f'"{acc}"' for acc in accounts])
 
-    # Define available functions for Gemini
-    save_expense_func = FunctionDeclaration(
-        name="save_expense",
-        description="Save one or more expenses to Notion database",
+    # Define the autonomous operation function
+    autonomous_func = FunctionDeclaration(
+        name="autonomous_operation",
+        description="Execute ANY Notion database operation - queries, creates, updates, deletes, transfers, analytics, etc.",
         parameters={
             "type": "object",
             "properties": {
-                "expenses": {
-                    "type": "array",
-                    "description": "List of expenses to save",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "item": {
-                                "type": "string",
-                                "description": "Expense description",
-                            },
-                            "amount": {"type": "number", "description": "Amount spent"},
-                            "category": {
-                                "type": "string",
-                                "description": f"Category from: {categories_list}",
-                            },
-                            "account": {
-                                "type": "string",
-                                "description": f"Account from: {accounts_list}",
-                            },
-                        },
-                        "required": ["item", "amount", "category"],
-                    },
-                }
-            },
-            "required": ["expenses"],
-        },
-    )
-
-    save_income_func = FunctionDeclaration(
-        name="save_income",
-        description="Save income entry to Notion database",
-        parameters={
-            "type": "object",
-            "properties": {
-                "income_entries": {
-                    "type": "array",
-                    "description": "List of income entries",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "source": {
-                                "type": "string",
-                                "description": "Income source",
-                            },
-                            "amount": {
-                                "type": "number",
-                                "description": "Income amount",
-                            },
-                            "account": {
-                                "type": "string",
-                                "description": f"Account from: {accounts_list}",
-                            },
-                        },
-                        "required": ["source", "amount"],
-                    },
-                }
-            },
-            "required": ["income_entries"],
-        },
-    )
-
-    get_summary_func = FunctionDeclaration(
-        name="get_monthly_summary",
-        description="Get comprehensive spending summary for current month with category breakdown and budget status",
-        parameters={"type": "object", "properties": {}},
-    )
-
-    check_budget_func = FunctionDeclaration(
-        name="check_budget_impact",
-        description="Check if a hypothetical expense would fit within category budget",
-        parameters={
-            "type": "object",
-            "properties": {
-                "category": {"type": "string", "description": "Category name"},
-                "amount": {
-                    "type": "number",
-                    "description": "Hypothetical expense amount",
+                "operation_type": {
+                    "type": "string",
+                    "enum": ["query", "create", "update", "delete", "analyze"],
+                    "description": "Type of operation: query (read data), create (add new), update (modify existing), delete (remove), analyze (calculate/aggregate)",
+                },
+                "database": {
+                    "type": "string",
+                    "enum": [
+                        "expenses",
+                        "income",
+                        "categories",
+                        "accounts",
+                        "subscriptions",
+                        "transfers",
+                    ],
+                    "description": "Target database",
+                },
+                "filters": {
+                    "type": "object",
+                    "description": "Query filters (for query/analyze). Use Notion filter syntax.",
+                },
+                "data": {
+                    "type": "object",
+                    "description": "Data to create/update. Use property names from schema.",
+                },
+                "page_id": {
+                    "type": "string",
+                    "description": "Page ID for update/delete operations",
+                },
+                "analysis_type": {
+                    "type": "string",
+                    "enum": ["sum", "average", "count"],
+                    "description": "Type of analysis for analyze operations",
+                },
+                "reasoning": {
+                    "type": "string",
+                    "description": "Explain what you're doing and why (for user confirmation)",
                 },
             },
-            "required": ["category", "amount"],
+            "required": ["operation_type", "database", "reasoning"],
         },
     )
 
-    get_unpaid_func = FunctionDeclaration(
-        name="get_unpaid_subscriptions",
-        description="Get list of fixed expenses or subscriptions that haven't been paid this month",
-        parameters={"type": "object", "properties": {}},
-    )
+    # Create tool
+    autonomous_tool = Tool(function_declarations=[autonomous_func])
 
-    delete_expense_func = FunctionDeclaration(
-        name="delete_last_expense",
-        description="Delete or remove the most recent expense entry. Use when user says 'delete last expense', 'remove last expense', 'undo last expense', etc.",
-        parameters={"type": "object", "properties": {}},
-    )
+    # Build comprehensive system instruction
+    system_instruction = f"""You are an autonomous financial assistant with FULL access to the user's Notion finance tracker.
 
-    delete_income_func = FunctionDeclaration(
-        name="delete_last_income",
-        description="Delete or remove the most recent income entry. Use when user says 'delete last income', 'remove last income', 'undo last income', etc.",
-        parameters={"type": "object", "properties": {}},
-    )
+🎯 YOUR CAPABILITIES:
+You can perform ANY operation on these databases using the autonomous_operation function:
 
-    # Create tool with all functions
-    expense_tool = Tool(
-        function_declarations=[
-            save_expense_func,
-            save_income_func,
-            get_summary_func,
-            check_budget_func,
-            get_unpaid_func,
-            delete_expense_func,
-            delete_income_func,
-        ]
-    )
+📊 DATABASES & SCHEMAS:
 
-    # Initialize model with tools
+1. **expenses**
+   - Name (title), Amount (number), Date (date)
+   - Accounts (relation), Categories (relation)
+   - Year, Monthly, Weekly, Misc (formulas)
+
+2. **income**
+   - Name (title), Amount (number), Date (date)
+   - Accounts (relation), Misc (text)
+
+3. **categories**
+   - Name (title), Monthly Budget (number)
+   - Monthly Expense, Status Bar, Status (formulas)
+   - Expenses (relation)
+
+4. **accounts**
+   - Name (title), Account Type (select: Bank/Credit Card)
+   - Initial Amount, Credit Limit, Utilization (numbers)
+   - Current Balance, Total Income/Expense/Transfer (formulas)
+   - Date (date), Payment Account (relation)
+
+5. **subscriptions** (Fixed Expenses Checklist)
+   - Name (title), Type (select), Amount (number)
+   - Monthly Cost (formula), Checkbox (checkbox)
+   - Account, Category (relations)
+
+6. **transfers** (Pay/Transfer)
+   - Name (title), Amount (number), Date (date)
+   - From Account, To Account (relations)
+
+📝 AVAILABLE CATEGORIES: {categories_list}
+💳 AVAILABLE ACCOUNTS: {accounts_list}
+
+🔍 NOTION FILTER SYNTAX EXAMPLES:
+
+Simple filter:
+{{"property": "Amount", "number": {{"greater_than": 500}}}}
+
+Compound filter (AND):
+{{
+  "and": [
+    {{"property": "Amount", "number": {{"greater_than": 500}}}},
+    {{"property": "Date", "date": {{"past_week": {{}}}}}}
+  ]
+}}
+
+Date filters:
+- {{"property": "Date", "date": {{"past_week": {{}}}}}}
+- {{"property": "Date", "date": {{"past_month": {{}}}}}}
+- {{"property": "Date", "date": {{"on_or_after": "2025-11-01"}}}}
+
+Text filters:
+- {{"property": "Name", "title": {{"contains": "lunch"}}}}
+
+Checkbox filters:
+- {{"property": "Checkbox", "checkbox": {{"equals": false}}}}
+
+💡 OPERATION EXAMPLES:
+
+User: "Show me all expenses over 500 taka from last week"
+→ autonomous_operation(
+    operation_type="query",
+    database="expenses",
+    filters={{"and": [{{"property": "Amount", "number": {{"greater_than": 500}}}}, {{"property": "Date", "date": {{"past_week": {{}}}}}}]}},
+    reasoning="Querying expenses over 500 from last week"
+  )
+
+User: "Transfer 5000 from BRAC to XYZ Credit Card"
+→ autonomous_operation(
+    operation_type="create",
+    database="transfers",
+    data={{"Name": "Transfer to XYZ", "Amount": 5000, "From Account": "BRAC_ID", "To Account": "XYZ_ID", "Date": "2025-11-24"}},
+    reasoning="Creating transfer record"
+  )
+
+User: "Add a new category called Gifts with 2000 budget"
+→ autonomous_operation(
+    operation_type="create",
+    database="categories",
+    data={{"Name": "Gifts", "Monthly Budget": 2000}},
+    reasoning="Creating new category with budget"
+  )
+
+User: "Which subscriptions are unchecked?"
+→ autonomous_operation(
+    operation_type="query",
+    database="subscriptions",
+    filters={{"property": "Checkbox", "checkbox": {{"equals": false}}}},
+    reasoning="Finding unpaid subscriptions"
+  )
+
+User: "What's my average daily spending?"
+→ autonomous_operation(
+    operation_type="analyze",
+    database="expenses",
+    filters={{"property": "Date", "date": {{"past_month": {{}}}}}},
+    analysis_type="average",
+    reasoning="Calculating average daily spending"
+  )
+
+🎭 PERSONALITY:
+- Be conversational and natural
+- Use emojis occasionally (but not excessively)
+- Don't ask unnecessary clarifying questions - make reasonable assumptions
+- If something is ambiguous, just pick the most likely interpretation
+- Show personality but stay helpful
+
+⚠️ IMPORTANT RULES:
+1. For simple expenses/income, use autonomous_operation with operation_type="create"
+2. For complex queries, analytics, or anything unusual, use autonomous_operation
+3. Always provide a natural response along with the function call
+4. For destructive operations (delete/update), the system will ask for confirmation automatically
+5. If an operation fails, I'll give you the error - you can retry with corrections
+
+🚀 BE CREATIVE AND AUTONOMOUS:
+- You're not limited to predefined functions
+- Figure out what the user wants and make it happen
+- Combine operations if needed
+- Be proactive - suggest insights when you see patterns"""
+
+    # Initialize model
     model = genai.GenerativeModel(
         "gemini-2.0-flash",
-        tools=[expense_tool],
-        system_instruction=f"""You are a friendly, conversational expense tracking assistant.
-Be natural, use emojis occasionally, show personality, but stay helpful.
-
-AVAILABLE CATEGORIES: {categories_list}
-AVAILABLE ACCOUNTS: {accounts_list}
-
-When users mention expenses, income, or ask about their finances, call the appropriate function.
-Always provide a natural, conversational response along with function calls.
-
-Examples:
-- "Lunch 150" → Call save_expense
-- "Did I forget any fixed expenses?" → Call get_unpaid_subscriptions
-- "Show my expenses" → Call get_monthly_summary
-- "Can I afford a 500 dollar phone?" → Call check_budget_impact
-- "Salary 50000" → Call save_income
-
-For casual conversation (greetings, thanks), just respond naturally without calling functions.""",
+        tools=[autonomous_tool],
+        system_instruction=system_instruction,
     )
 
     try:
@@ -260,16 +292,19 @@ For casual conversation (greetings, thanks), just respond naturally without call
         }
 
 
-def execute_function_calls(function_calls):
+def execute_function_calls(function_calls, user_id=None):
     """
     Execute function calls from Gemini and return results.
 
     Args:
         function_calls: List of function calls from Gemini
+        user_id: Telegram user ID (for confirmations)
 
     Returns:
         Dict with execution results
     """
+    from .autonomous import execute_autonomous_operation
+
     results = []
 
     for call in function_calls:
@@ -277,64 +312,18 @@ def execute_function_calls(function_calls):
         args = call["args"]
 
         try:
-            if func_name == "save_expense":
-                # Convert to old format for compatibility
-                transaction_data = {"type": "expense", "data": args["expenses"]}
-                result = process_transaction(transaction_data)
+            if func_name == "autonomous_operation":
+                # Execute autonomous operation
+                result = execute_autonomous_operation(args, user_id)
                 results.append({"function": func_name, "result": result})
-
-            elif func_name == "save_income":
-                # Convert to old format
-                transaction_data = {"type": "income", "data": args["income_entries"]}
-                result = process_transaction(transaction_data)
-                results.append({"function": func_name, "result": result})
-
-            elif func_name == "get_monthly_summary":
-                summary = get_monthly_summary()
-                results.append(
-                    {
-                        "function": func_name,
-                        "result": {"success": True, "data": summary},
-                    }
-                )
-
-            elif func_name == "check_budget_impact":
-                check_result = check_budget_impact(args["category"], args["amount"])
-                results.append(
-                    {
-                        "function": func_name,
-                        "result": {"success": True, "data": check_result},
-                    }
-                )
-
-            elif func_name == "get_unpaid_subscriptions":
-                unpaid = get_unpaid_subscriptions()
-                results.append(
-                    {"function": func_name, "result": {"success": True, "data": unpaid}}
-                )
-
-            elif func_name == "delete_last_expense":
-                success, message, details = delete_last_expense()
+            else:
+                # Unknown function
                 results.append(
                     {
                         "function": func_name,
                         "result": {
-                            "success": success,
-                            "message": message,
-                            "details": details,
-                        },
-                    }
-                )
-
-            elif func_name == "delete_last_income":
-                success, message, details = delete_last_income()
-                results.append(
-                    {
-                        "function": func_name,
-                        "result": {
-                            "success": success,
-                            "message": message,
-                            "details": details,
+                            "success": False,
+                            "error": f"Unknown function: {func_name}",
                         },
                     }
                 )
@@ -345,259 +334,3 @@ def execute_function_calls(function_calls):
             )
 
     return results
-
-
-def _validate_category(category_name, item_label):
-    """
-    Validate that a category exists in Notion.
-    Returns (is_valid, error_message)
-    """
-    if not category_name:
-        return False, f"{item_label}: Category is missing"
-
-    try:
-        category_db_id = get_database_id("categories")
-        from .notion_client import find_page_by_name
-
-        cat_page = find_page_by_name(category_db_id, category_name)
-        if not cat_page:
-            return (
-                False,
-                f"{item_label}: Category '{category_name}' not found in Notion",
-            )
-        return True, None
-    except Exception as e:
-        return False, f"{item_label}: Failed to validate category - {str(e)}"
-
-
-def _validate_account(account_name, item_label):
-    """
-    Validate that an account exists in Notion.
-    Returns (is_valid, error_message)
-    """
-    if not account_name:
-        return False, f"{item_label}: Account is missing"
-
-    try:
-        account_db_id = get_database_id("accounts")
-        from .notion_client import find_page_by_name
-
-        acc_page = find_page_by_name(account_db_id, account_name)
-        if not acc_page:
-            return False, f"{item_label}: Account '{account_name}' not found in Notion"
-        return True, None
-    except Exception as e:
-        return False, f"{item_label}: Failed to validate account - {str(e)}"
-
-
-def process_transaction(transaction_data):
-    """
-    Route transaction data to appropriate handler based on type.
-    Uses partial-success pattern: validates all items, saves valid ones,
-    reports failures clearly.
-
-    This allows "Paid 200 for bike, 330 for youtube, 300 for utils" to
-    save bike and youtube successfully while clearly reporting that utils
-    failed validation. User gets immediate feedback and doesn't need to
-    re-send valid transactions.
-    """
-    # Handle summary request
-    if transaction_data["type"] == "summary":
-        summary = get_monthly_summary()
-        return {"success": True, "type": "summary", "data": summary}
-
-    # Handle budget check
-    elif transaction_data["type"] == "budget_check":
-        data = transaction_data.get("data", {})
-        category = data.get("category", "")
-        amount = data.get("amount", 0)
-
-        if not category or not amount:
-            return {
-                "success": False,
-                "message": "Please specify both category and amount.",
-            }
-
-        check_result = check_budget_impact(category, amount)
-        return {"success": True, "type": "budget_check", "data": check_result}
-
-    # PHASE 1: VALIDATE ALL ITEMS AND SEPARATE VALID/INVALID
-    validation_errors = []
-    validated_items = []
-    failed_items = []
-
-    if transaction_data["type"] == "expense":
-        for idx, item in enumerate(transaction_data["data"], 1):
-            item_name = item.get("item", "Unknown")
-            item_label = f"Expense #{idx} ({item_name})"
-            item_errors = []
-
-            # Validate amount
-            amount = item.get("amount")
-            if amount is None or amount == 0:
-                item_errors.append(f"{item_label}: Amount is missing or zero")
-
-            # Validate category
-            category = item.get("category", "")
-            is_valid, error = _validate_category(category, item_label)
-            if not is_valid:
-                item_errors.append(error)
-
-            # Validate account
-            account = item.get("account", "BRAC Bank Salary Account")
-            is_valid_acc, error_acc = _validate_account(account, item_label)
-            if not is_valid_acc:
-                item_errors.append(error_acc)
-
-            # Categorize this item
-            if item_errors:
-                validation_errors.extend(item_errors)
-                failed_items.append(
-                    {
-                        "name": item_name,
-                        "amount": item.get("amount"),
-                        "errors": item_errors,
-                    }
-                )
-            else:
-                validated_items.append(("expense", item))
-
-    elif transaction_data["type"] == "income":
-        for idx, item in enumerate(transaction_data["data"], 1):
-            source_name = item.get("source", "Unknown")
-            item_label = f"Income #{idx} ({source_name})"
-            item_errors = []
-
-            # Validate amount
-            amount = item.get("amount")
-            if amount is None or amount == 0:
-                item_errors.append(f"{item_label}: Amount is missing or zero")
-
-            # Validate account
-            account = item.get("account", "BRAC Bank Salary Account")
-            is_valid, error = _validate_account(account, item_label)
-            if not is_valid:
-                item_errors.append(error)
-
-            # Categorize this item
-            if item_errors:
-                validation_errors.extend(item_errors)
-                failed_items.append(
-                    {
-                        "name": source_name,
-                        "amount": item.get("amount"),
-                        "errors": item_errors,
-                    }
-                )
-            else:
-                validated_items.append(("income", item))
-
-    # PHASE 2: SAVE ALL VALID ITEMS
-    successful_results = []
-    execution_failures = []
-
-    for trans_type, item in validated_items:
-        try:
-            if trans_type == "expense":
-                res = add_expense(
-                    item["item"],
-                    item["amount"],
-                    item.get("category", ""),
-                    item.get("account", "BRAC Bank Salary Account"),
-                )
-            elif trans_type == "income":
-                res = add_income(
-                    item["source"],
-                    item["amount"],
-                    item.get("account", "BRAC Bank Salary Account"),
-                )
-
-            if res.get("success"):
-                successful_results.append(
-                    {"type": trans_type, "item": item, "result": res}
-                )
-            else:
-                execution_failures.append(
-                    {
-                        "type": trans_type,
-                        "item": item,
-                        "error": res.get("message", "Unknown error"),
-                    }
-                )
-
-        except Exception as e:
-            execution_failures.append(
-                {"type": trans_type, "item": item, "error": str(e)}
-            )
-
-    # PHASE 3: BUILD COMPREHENSIVE RESPONSE
-    total_attempted = len(transaction_data.get("data", []))
-    total_saved = len(successful_results)
-    total_failed = len(failed_items) + len(execution_failures)
-
-    # If nothing succeeded, return failure
-    if total_saved == 0:
-        error_msg = "❌ No transactions were saved.\n\n"
-        if validation_errors:
-            error_msg += "Validation errors:\n" + "\n".join(
-                f"• {err}" for err in validation_errors
-            )
-        if execution_failures:
-            error_msg += "\n\nExecution errors:\n" + "\n".join(
-                f"• {f['item'].get('item') or f['item'].get('source')}: {f['error']}"
-                for f in execution_failures
-            )
-        return {"success": False, "message": error_msg}
-
-    # Build success response with warnings about failures
-    warnings = [
-        r["result"].get("budget_warning")
-        for r in successful_results
-        if r["result"].get("budget_warning")
-    ]
-    checklist_msgs = [
-        r["result"].get("checklist_ticked")
-        for r in successful_results
-        if r["result"].get("checklist_ticked")
-    ]
-
-    response = {
-        "success": True,
-        "count": total_saved,
-        "total_attempted": total_attempted,
-        "budget_warnings": warnings,
-        "checklist_messages": checklist_msgs,
-        "saved_items": [
-            {
-                "name": r["item"].get("item") or r["item"].get("source"),
-                "amount": r["item"].get("amount"),
-            }
-            for r in successful_results
-        ],
-    }
-
-    # Add failure details if any
-    if failed_items or execution_failures:
-        response["partial_success"] = True
-        response["failed_count"] = total_failed
-        response["failures"] = []
-
-        for failed in failed_items:
-            response["failures"].append(
-                {
-                    "name": failed["name"],
-                    "amount": failed.get("amount"),
-                    "reason": "; ".join(failed["errors"]),
-                }
-            )
-
-        for failed in execution_failures:
-            response["failures"].append(
-                {
-                    "name": failed["item"].get("item") or failed["item"].get("source"),
-                    "amount": failed["item"].get("amount"),
-                    "reason": failed["error"],
-                }
-            )
-
-    return response
