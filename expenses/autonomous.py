@@ -601,16 +601,49 @@ class SmartExecutor:
             elif prop_type == "select":
                 properties[key] = {"select": {"name": str(value)}}
             elif prop_type == "relation":
-                # Assume value is a page ID or name
+                # Need to resolve names to page IDs
                 if isinstance(value, str):
                     # Try to find page by name
-                    # This requires knowing which database the relation points to
-                    # For now, assume it's a page ID
-                    properties[key] = {"relation": [{"id": value}]}
+                    page_id = cls._resolve_relation_id(key, value)
+                    if page_id:
+                        properties[key] = {"relation": [{"id": page_id}]}
                 elif isinstance(value, list):
-                    properties[key] = {"relation": [{"id": v} for v in value]}
+                    # Multiple relations
+                    relation_ids = []
+                    for v in value:
+                        page_id = cls._resolve_relation_id(key, v)
+                        if page_id:
+                            relation_ids.append({"id": page_id})
+                    if relation_ids:
+                        properties[key] = {"relation": relation_ids}
 
         return properties
+
+    @classmethod
+    def _resolve_relation_id(cls, property_name: str, value: str) -> Optional[str]:
+        """Resolve a relation name to a page ID."""
+        # Map property names to their target databases
+        relation_map = {
+            "Categories": "categories",
+            "Accounts": "accounts",
+            "Category": "categories",
+            "Account": "accounts",
+            "From Account": "accounts",
+            "To Account": "accounts",
+            "Payment Account": "accounts",
+        }
+
+        target_db = relation_map.get(property_name)
+        if not target_db:
+            # Unknown relation, assume value is already an ID
+            return value if len(value) == 36 else None  # UUID length check
+
+        # Look up the page by name
+        db_id = get_database_id(target_db)
+        if db_id:
+            return find_page_by_name(db_id, value)
+
+        return None
 
     @classmethod
     def _format_query_results(cls, results: List[Dict]) -> List[Dict]:
@@ -624,25 +657,61 @@ class SmartExecutor:
             for prop_name, prop_data in props.items():
                 prop_type = prop_data.get("type")
 
-                if prop_type == "title":
-                    title_content = prop_data.get("title", [])
-                    if title_content:
-                        formatted_page[prop_name] = title_content[0].get(
-                            "plain_text", ""
-                        )
-                elif prop_type == "number":
-                    formatted_page[prop_name] = prop_data.get("number")
-                elif prop_type == "date":
-                    date_obj = prop_data.get("date", {})
-                    if date_obj:
-                        formatted_page[prop_name] = date_obj.get("start")
-                elif prop_type == "checkbox":
-                    formatted_page[prop_name] = prop_data.get("checkbox")
-                elif prop_type == "select":
-                    select_obj = prop_data.get("select", {})
-                    if select_obj:
-                        formatted_page[prop_name] = select_obj.get("name")
-                # Add more types as needed
+                try:
+                    if prop_type == "title":
+                        title_content = prop_data.get("title", [])
+                        if title_content:
+                            formatted_page[prop_name] = title_content[0].get(
+                                "plain_text", ""
+                            )
+                    elif prop_type == "number":
+                        formatted_page[prop_name] = prop_data.get("number")
+                    elif prop_type == "date":
+                        date_obj = prop_data.get("date", {})
+                        if date_obj:
+                            formatted_page[prop_name] = date_obj.get("start")
+                    elif prop_type == "checkbox":
+                        formatted_page[prop_name] = prop_data.get("checkbox")
+                    elif prop_type == "select":
+                        select_obj = prop_data.get("select", {})
+                        if select_obj:
+                            formatted_page[prop_name] = select_obj.get("name")
+                    elif prop_type == "multi_select":
+                        multi_select = prop_data.get("multi_select", [])
+                        formatted_page[prop_name] = [
+                            item.get("name") for item in multi_select
+                        ]
+                    elif prop_type == "relation":
+                        # Just return count of relations, not the full objects
+                        relations = prop_data.get("relation", [])
+                        formatted_page[prop_name] = len(relations)
+                    elif prop_type == "formula":
+                        # Extract the computed value from formula
+                        formula = prop_data.get("formula", {})
+                        formula_type = formula.get("type")
+                        if formula_type == "number":
+                            formatted_page[prop_name] = formula.get("number")
+                        elif formula_type == "string":
+                            formatted_page[prop_name] = formula.get("string")
+                        elif formula_type == "boolean":
+                            formatted_page[prop_name] = formula.get("boolean")
+                        elif formula_type == "date":
+                            date_obj = formula.get("date", {})
+                            if date_obj:
+                                formatted_page[prop_name] = date_obj.get("start")
+                    elif prop_type == "rollup":
+                        # Extract the computed value from rollup
+                        rollup = prop_data.get("rollup", {})
+                        rollup_type = rollup.get("type")
+                        if rollup_type == "number":
+                            formatted_page[prop_name] = rollup.get("number")
+                        elif rollup_type == "array":
+                            # Skip complex arrays
+                            formatted_page[prop_name] = len(rollup.get("array", []))
+                    # Skip other complex types (files, people, etc.)
+                except Exception:
+                    # If any property fails to format, skip it
+                    continue
 
             formatted.append(formatted_page)
 
