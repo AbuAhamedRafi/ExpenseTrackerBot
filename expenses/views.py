@@ -141,6 +141,24 @@ class TelegramWebhookView(APIView):
 
                     self.send_telegram_message(chat_id, reply_text)
 
+                elif func_name == "delete_last_expense":
+                    if result.get("success"):
+                        details = result.get("details", {})
+                        reply_text = f"\n🗑️ {result.get('message', 'Expense deleted')}"
+                        self.send_telegram_message(chat_id, reply_text)
+                    else:
+                        reply_text = f"\n❌ {result.get('message', 'Could not delete expense')}"
+                        self.send_telegram_message(chat_id, reply_text)
+
+                elif func_name == "delete_last_income":
+                    if result.get("success"):
+                        details = result.get("details", {})
+                        reply_text = f"\n🗑️ {result.get('message', 'Income deleted')}"
+                        self.send_telegram_message(chat_id, reply_text)
+                    else:
+                        reply_text = f"\n❌ {result.get('message', 'Could not delete income')}"
+                        self.send_telegram_message(chat_id, reply_text)
+
                 elif func_name in ["save_expense", "save_income"]:
                     if result.get("success"):
                         # Add details for partial success

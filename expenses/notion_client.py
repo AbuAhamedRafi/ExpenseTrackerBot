@@ -202,6 +202,64 @@ def get_all_page_names(database_id):
     return names
 
 
+def archive_page(page_id):
+    """
+    Archive (soft delete) a Notion page.
+
+    Args:
+        page_id: Page ID to archive
+
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    url = f"https://api.notion.com/v1/pages/{page_id}"
+    payload = {"archived": True}
+
+    try:
+        session = get_session()
+        response = session.patch(url, json=payload, headers=get_headers(), timeout=25)
+        
+        if response.status_code == 200:
+            return True, "Page archived successfully"
+        return False, f"Failed to archive: {response.text}"
+    except requests.exceptions.RequestException as e:
+        return False, f"Archive request failed: {str(e)}"
+
+
+def get_latest_entry(database_id, sorts=None):
+    """
+    Get the most recent entry from a database.
+
+    Args:
+        database_id: Database ID to query
+        sorts: Optional sort configuration (defaults to created_time descending)
+
+    Returns:
+        Page object or None if not found
+    """
+    url = f"https://api.notion.com/v1/databases/{database_id}/query"
+    
+    # Default sort by creation time, newest first
+    if sorts is None:
+        sorts = [{"timestamp": "created_time", "direction": "descending"}]
+    
+    payload = {
+        "sorts": sorts,
+        "page_size": 1
+    }
+
+    try:
+        session = get_session()
+        response = session.post(url, json=payload, headers=get_headers(), timeout=25)
+
+        if response.status_code == 200:
+            results = response.json().get("results", [])
+            return results[0] if results else None
+        return None
+    except requests.exceptions.RequestException:
+        return None
+
+
 def extract_number_property(page, property_name):
     """
     Extract a number value from a page property.

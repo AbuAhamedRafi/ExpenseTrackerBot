@@ -5,7 +5,12 @@ import google.generativeai as genai
 from google.generativeai.types import FunctionDeclaration, Tool
 
 from .notion_client import get_database_id, get_all_page_names
-from .transaction_manager import add_expense, add_income
+from .transaction_manager import (
+    add_expense,
+    add_income,
+    delete_last_expense,
+    delete_last_income,
+)
 from .budget_tracker import (
     get_monthly_summary,
     check_budget_impact,
@@ -176,6 +181,18 @@ def ask_gemini(text):
         parameters={"type": "object", "properties": {}},
     )
 
+    delete_expense_func = FunctionDeclaration(
+        name="delete_last_expense",
+        description="Delete or remove the most recent expense entry. Use when user says 'delete last expense', 'remove last expense', 'undo last expense', etc.",
+        parameters={"type": "object", "properties": {}},
+    )
+
+    delete_income_func = FunctionDeclaration(
+        name="delete_last_income",
+        description="Delete or remove the most recent income entry. Use when user says 'delete last income', 'remove last income', 'undo last income', etc.",
+        parameters={"type": "object", "properties": {}},
+    )
+
     # Create tool with all functions
     expense_tool = Tool(
         function_declarations=[
@@ -184,6 +201,8 @@ def ask_gemini(text):
             get_summary_func,
             check_budget_func,
             get_unpaid_func,
+            delete_expense_func,
+            delete_income_func,
         ]
     )
 
@@ -292,6 +311,32 @@ def execute_function_calls(function_calls):
                 unpaid = get_unpaid_subscriptions()
                 results.append(
                     {"function": func_name, "result": {"success": True, "data": unpaid}}
+                )
+
+            elif func_name == "delete_last_expense":
+                success, message, details = delete_last_expense()
+                results.append(
+                    {
+                        "function": func_name,
+                        "result": {
+                            "success": success,
+                            "message": message,
+                            "details": details,
+                        },
+                    }
+                )
+
+            elif func_name == "delete_last_income":
+                success, message, details = delete_last_income()
+                results.append(
+                    {
+                        "function": func_name,
+                        "result": {
+                            "success": success,
+                            "message": message,
+                            "details": details,
+                        },
+                    }
                 )
 
         except Exception as e:
