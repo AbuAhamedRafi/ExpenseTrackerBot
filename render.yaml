@@ -3,7 +3,7 @@ services:
     name: expense-tracker-bot
     env: python
     buildCommand: "./build.sh"
-    startCommand: "gunicorn main.wsgi:application"
+    startCommand: "gunicorn main.wsgi:application --timeout 60 --workers 2"
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
