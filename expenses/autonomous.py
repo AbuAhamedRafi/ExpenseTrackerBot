@@ -447,7 +447,19 @@ class SmartExecutor:
             elif op_type == "create":
                 return cls._handle_create(database, operation["data"])
             elif op_type == "update":
-                return cls._handle_update(operation["page_id"], operation["data"])
+                # If page_id is provided, update directly
+                if "page_id" in operation:
+                    return cls._handle_update(operation["page_id"], operation["data"])
+                # If filters are provided, query first then update
+                elif "filters" in operation:
+                    return cls._handle_bulk_update(
+                        operation["database"], operation["filters"], operation["data"]
+                    )
+                else:
+                    return {
+                        "success": False,
+                        "message": "Update requires 'page_id' or 'filters'",
+                    }
             elif op_type == "delete":
                 return cls._handle_delete(operation["page_id"])
             elif op_type == "analyze":
@@ -532,6 +544,38 @@ class SmartExecutor:
             return {"success": True, "message": "Updated successfully"}
         else:
             return {"success": False, "message": "Update failed"}
+
+    @classmethod
+    def _handle_bulk_update(cls, database: str, filters: Dict, data: Dict) -> Dict:
+        """Handle update by query (bulk update)."""
+        # 1. Find pages to update
+        query_result = cls._handle_query(database, filters)
+        if not query_result["success"]:
+            return query_result
+
+        pages = query_result["data"]
+        if not pages:
+            return {"success": False, "message": "No items found to update"}
+
+        # 2. Update each page
+        # Note: query_result['data'] is formatted, we need raw IDs.
+        # We should modify _handle_query to return raw IDs or re-query here.
+        # For safety, let's re-query to get raw IDs
+        db_id = get_database_id(database)
+        raw_results = query_database(db_id, filters)
+
+        updated_count = 0
+        for page in raw_results:
+            page_id = page["id"]
+            # Build properties for this specific page update
+            properties = cls._build_properties(database, data)
+            if update_page(page_id, properties):
+                updated_count += 1
+
+        return {
+            "success": True,
+            "message": f"Updated {updated_count} items successfully",
+        }
 
     @classmethod
     def _handle_delete(cls, page_id: str) -> Dict:
