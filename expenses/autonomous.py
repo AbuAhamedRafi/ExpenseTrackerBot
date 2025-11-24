@@ -499,7 +499,9 @@ class SmartExecutor:
         success, result = create_page(db_id, properties)
 
         if success:
-            return {"success": True, "message": "Created successfully", "data": result}
+            # Return clean success message, not the full Notion object
+            item_name = data.get("Name", "Item")
+            return {"success": True, "message": f"Created {item_name} successfully"}
         else:
             return {"success": False, "message": result}
 

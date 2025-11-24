@@ -1,6 +1,7 @@
 import os
 import json
 import time
+from datetime import datetime
 import google.generativeai as genai
 from google.generativeai.types import FunctionDeclaration, Tool
 
@@ -127,11 +128,21 @@ def ask_gemini(text):
     # Create tool
     autonomous_tool = Tool(function_declarations=[autonomous_func])
 
+    # Get current date dynamically
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    current_year = datetime.now().year
+
     # Build comprehensive system instruction
     system_instruction = f"""You are an autonomous financial assistant with FULL access to the user's Notion finance tracker.
 
 🎯 YOUR CAPABILITIES:
 You can perform ANY operation on these databases using the autonomous_operation function:
+
+⏰ CURRENT DATE CONTEXT:
+- Today's date: {current_date}
+- Current year: {current_year}
+- ALWAYS use {current_year} for the year when creating expenses/income unless user specifies otherwise
+- Format dates as: YYYY-MM-DD (e.g., {current_date})
 
 📊 DATABASES & SCHEMAS:
 
@@ -183,6 +194,7 @@ Compound filter (AND):
 Date filters:
 - {{"property": "Date", "date": {{"past_week": {{}}}}}}
 - {{"property": "Date", "date": {{"past_month": {{}}}}}}
+- {{"property": "Date", "date": {{"equals": "2025-11-24"}}}}
 - {{"property": "Date", "date": {{"on_or_after": "2025-11-01"}}}}
 
 Text filters:
@@ -201,11 +213,19 @@ User: "Show me all expenses over 500 taka from last week"
     reasoning="Querying expenses over 500 from last week"
   )
 
+User: "I took a pathao ride for 120 taka"
+→ autonomous_operation(
+    operation_type="create",
+    database="expenses",
+    data={{"Name": "Pathao Ride", "Amount": 120, "Categories": "Transportation", "Date": "{current_date}"}},
+    reasoning="Creating transportation expense"
+  )
+
 User: "Transfer 5000 from BRAC to XYZ Credit Card"
 → autonomous_operation(
     operation_type="create",
     database="transfers",
-    data={{"Name": "Transfer to XYZ", "Amount": 5000, "From Account": "BRAC_ID", "To Account": "XYZ_ID", "Date": "2025-11-24"}},
+    data={{"Name": "Transfer to XYZ", "Amount": 5000, "From Account": "BRAC Bank Salary Account", "To Account": "XYZ Credit Card", "Date": "{current_date}"}},
     reasoning="Creating transfer record"
   )
 
@@ -247,6 +267,8 @@ User: "What's my average daily spending?"
 3. Always provide a natural response along with the function call
 4. For destructive operations (delete/update), the system will ask for confirmation automatically
 5. If an operation fails, I'll give you the error - you can retry with corrections
+6. ALWAYS use year {current_year} for current dates unless user specifies otherwise
+7. Default account is "BRAC Bank Salary Account" if not specified
 
 🚀 BE CREATIVE AND AUTONOMOUS:
 - You're not limited to predefined functions
