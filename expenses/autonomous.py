@@ -541,25 +541,33 @@ class SmartExecutor:
                 "Accounts": "accounts",
                 "Category": "categories",
                 "Account": "accounts",
-                "From Account": "accounts",
-                "To Account": "accounts",
                 "Payment Account": "accounts",
             }
 
             target_db = relation_map.get(prop_name)
             if target_db:
-                # This is a relation filter. Check if it's using a text/select filter type
+                # This is a relation filter. Check if it's using a text/select/relation filter type
                 # Notion requires "relation": {"contains": "id"}
-                # But Gemini might send "select": {"equals": "Name"} or "rich_text": ...
 
                 # Extract the value to search for
                 search_value = None
                 if "select" in resolved and "equals" in resolved["select"]:
                     search_value = resolved["select"]["equals"]
+                elif (
+                    "multi_select" in resolved
+                    and "contains" in resolved["multi_select"]
+                ):
+                    search_value = resolved["multi_select"]["contains"]
                 elif "rich_text" in resolved and "contains" in resolved["rich_text"]:
                     search_value = resolved["rich_text"]["contains"]
                 elif "rich_text" in resolved and "equals" in resolved["rich_text"]:
                     search_value = resolved["rich_text"]["equals"]
+                elif "relation" in resolved and "contains" in resolved["relation"]:
+                    # Gemini might try to use the name in the relation filter
+                    val = resolved["relation"]["contains"]
+                    # If it's not a UUID, assume it's a name
+                    if len(val) != 36:
+                        search_value = val
 
                 if search_value:
                     # Resolve name to ID
