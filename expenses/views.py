@@ -36,14 +36,6 @@ class TelegramWebhookView(APIView):
             if not text:
                 return Response({"status": "no_text"}, status=status.HTTP_200_OK)
 
-            # Check for duplicate webhook (simple deduplication)
-            if (
-                hasattr(self.__class__, "_last_update_id")
-                and self.__class__._last_update_id == update_id
-            ):
-                return Response({"status": "duplicate"}, status=status.HTTP_200_OK)
-            self.__class__._last_update_id = update_id
-
             # Process with Gemini
             gemini_response = ask_gemini(text)
 
