@@ -9,7 +9,7 @@ from .services import ask_gemini, execute_function_calls
 
 class TelegramWebhookView(APIView):
     """
-    Handles incoming webhook requests from Telegram using Gemini function calling.
+    Handles incoming webhook requests from Telegram using Gemini autonomous operations.
     """
 
     def post(self, request, *args, **kwargs):
@@ -36,6 +36,14 @@ class TelegramWebhookView(APIView):
             if not text:
                 return Response({"status": "no_text"}, status=status.HTTP_200_OK)
 
+            # Check for duplicate webhook (simple deduplication)
+            if (
+                hasattr(self.__class__, "_last_update_id")
+                and self.__class__._last_update_id == update_id
+            ):
+                return Response({"status": "duplicate"}, status=status.HTTP_200_OK)
+            self.__class__._last_update_id = update_id
+
             # Process with Gemini
             gemini_response = ask_gemini(text)
 
@@ -51,129 +59,81 @@ class TelegramWebhookView(APIView):
             if not function_calls:
                 return Response({"status": "success"}, status=status.HTTP_200_OK)
 
-            # Execute function calls
-            execution_results = execute_function_calls(function_calls)
+            # Execute function calls (pass user_id for confirmations)
+            execution_results = execute_function_calls(
+                function_calls, user_id=str(user_id)
+            )
 
             # Process each function result
             for exec_result in execution_results:
                 func_name = exec_result["function"]
                 result = exec_result["result"]
 
-                if func_name == "get_monthly_summary":
-                    if result.get("success"):
-                        summary = result["data"]
-                        reply_text = f"\n📊 *{summary['month']} Summary*\n\n"
-                        reply_text += f"💰 Income: ${summary['total_income']:.2f}\n"
-                        reply_text += f"💸 Spent: ${summary['total_spent']:.2f}\n"
-                        reply_text += f"💵 Remaining: ${summary['remaining']:.2f}\n"
+                if func_name == "autonomous_operation":
+                    # Handle autonomous operation results
+                    if result.get("requires_confirmation"):
+                        # Operation needs confirmation
+                        reply_text = f"⚠️ {result.get('message', 'Confirm this action')}"
+                        if result.get("operation_details"):
+                            reply_text += f"\n\n{result['operation_details']}"
+                        self.send_telegram_message(chat_id, reply_text)
 
-                        if summary["categories"]:
-                            reply_text += "\n*By Category:*\n"
-                            for cat in summary["categories"]:
-                                budget_info = ""
-                                if cat["budget"]:
-                                    remaining = cat["budget"] - cat["spent"]
-                                    percentage = (cat["spent"] / cat["budget"]) * 100
-                                    if percentage > 100:
-                                        budget_info = f" ⚠️ ${abs(remaining):.2f} over"
-                                    elif percentage >= 90:
-                                        budget_info = f" ⚠️ ${remaining:.2f} left"
+                    elif result.get("success"):
+                        # Operation succeeded
+                        message = result.get("message", "Done!")
+                        data = result.get("data")
+
+                        # Format response based on data
+                        if data:
+                            if isinstance(data, list):
+                                # Query results
+                                if len(data) == 0:
+                                    reply_text = f"✅ {message}\n\nNo results found."
+                                else:
+                                    reply_text = f"✅ {message}\n\nFound {len(data)} result(s):\n"
+                                    for i, item in enumerate(
+                                        data[:10], 1
+                                    ):  # Limit to 10
+                                        # Format each item
+                                        name = item.get("Name", "Unknown")
+                                        amount = item.get("Amount")
+                                        date = item.get("Date", "")
+
+                                        if amount is not None:
+                                            reply_text += f"{i}. {name}: ${amount:.2f}"
+                                        else:
+                                            reply_text += f"{i}. {name}"
+
+                                        if date:
+                                            reply_text += f" ({date[:10]})"
+                                        reply_text += "\n"
+
+                                    if len(data) > 10:
+                                        reply_text += f"\n... and {len(data) - 10} more"
+
+                            elif isinstance(data, dict):
+                                # Single result or analytics
+                                reply_text = f"✅ {message}\n\n"
+                                for key, value in data.items():
+                                    if isinstance(value, (int, float)):
+                                        reply_text += f"{key}: ${value:.2f}\n"
                                     else:
-                                        budget_info = f" ✓ ${remaining:.2f} left"
-                                reply_text += f"• {cat['name']}: ${cat['spent']:.2f}{budget_info}\n"
-                    else:
-                        reply_text = "\n❌ Couldn't fetch the data right now."
-
-                    self.send_telegram_message(chat_id, reply_text)
-
-                elif func_name == "check_budget_impact":
-                    if result.get("success"):
-                        check = result["data"]
-                        reply_text = f"\n*{check.get('category', 'Category')} Budget*\n"
-
-                        if check["status"] == "no_budget":
-                            reply_text += f"No budget set.\nCurrent: ${check['current_spent']:.2f}\n"
-                            reply_text += f"After: ${check['projected_spent']:.2f}"
-                        elif check["status"] != "unknown":
-                            reply_text += f"Current: ${check['current_spent']:.2f} / ${check['budget']:.2f}\n"
-                            reply_text += (
-                                f"After expense: ${check['projected_spent']:.2f}\n"
-                            )
-                            reply_text += f"Remaining: ${check['remaining']:.2f} ({check['percentage']:.0f}% used)\n\n"
-
-                            # Natural status message
-                            if check["status"] == "safe":
-                                reply_text += "✅ You're good to go!"
-                            elif check["status"] == "approaching_limit":
-                                reply_text += "⚠️ Getting close to your limit."
-                            elif check["status"] == "close_to_limit":
-                                reply_text += "⚠️ Very close to budget limit!"
+                                        reply_text += f"{key}: {value}\n"
                             else:
-                                reply_text += "🚫 This would put you over budget."
-                    else:
-                        reply_text = (
-                            f"\n❌ {result.get('error', 'Error checking budget')}"
-                        )
-
-                    self.send_telegram_message(chat_id, reply_text)
-
-                elif func_name == "get_unpaid_subscriptions":
-                    if result.get("success"):
-                        unpaid_data = result["data"]
-                        if unpaid_data["unpaid_count"] > 0:
-                            reply_text = f"\n💡 You have {unpaid_data['unpaid_count']} unpaid subscription(s):\n"
-                            for item in unpaid_data["unpaid_items"]:
-                                reply_text += f"• {item}\n"
+                                reply_text = f"✅ {message}"
                         else:
-                            reply_text = "\n✅ All subscriptions are paid this month!"
+                            reply_text = f"✅ {message}"
+
+                        self.send_telegram_message(chat_id, reply_text)
+
                     else:
-                        reply_text = f"\n❌ {result.get('error', 'Error fetching subscriptions')}"
+                        # Operation failed
+                        error_msg = result.get("message", "Something went wrong")
+                        reply_text = f"❌ {error_msg}"
 
-                    self.send_telegram_message(chat_id, reply_text)
+                        if result.get("retry_suggested"):
+                            reply_text += "\n\nI'll try to fix this..."
 
-                elif func_name in ["save_expense", "save_income"]:
-                    if result.get("success"):
-                        # Add details for partial success
-                        if result.get("partial_success"):
-                            reply_text = f"\n\n⚠️ Saved {result['count']} of {result['total_attempted']}:\n"
-                            for item in result["saved_items"]:
-                                reply_text += f"✅ {item['name']} (${item['amount']})\n"
-
-                            reply_text += f"\n❌ Failed {result['failed_count']}:\n"
-                            for failure in result["failures"]:
-                                reply_text += (
-                                    f"• {failure['name']}: {failure['reason']}\n"
-                                )
-                        else:
-                            # Full success - already in natural message
-                            pass
-
-                        # Add budget warnings
-                        if result.get("budget_warnings"):
-                            reply_text = "\n\n⚠️ Budget alerts:\n"
-                            for warning in result["budget_warnings"]:
-                                reply_text += f"{warning}\n"
-                            self.send_telegram_message(chat_id, reply_text)
-
-                        # Add checklist updates
-                        if result.get("checklist_messages"):
-                            reply_text = "\n✓ "
-                            reply_text += "\n✓ ".join(result["checklist_messages"])
-                            self.send_telegram_message(chat_id, reply_text)
-
-                        # Send partial success message if exists
-                        if result.get("partial_success"):
-                            reply_text = f"\n⚠️ Saved {result['count']} of {result['total_attempted']}:\n"
-                            for item in result["saved_items"]:
-                                reply_text += f"✅ {item['name']} (${item['amount']})\n"
-                            reply_text += f"\n❌ Failed {result['failed_count']}:\n"
-                            for failure in result["failures"]:
-                                reply_text += (
-                                    f"• {failure['name']}: {failure['reason']}\n"
-                                )
-                            self.send_telegram_message(chat_id, reply_text)
-                    else:
-                        reply_text = f"\n❌ {result.get('message', 'Could not save')}"
                         self.send_telegram_message(chat_id, reply_text)
 
             return Response({"status": "success"}, status=status.HTTP_200_OK)
@@ -191,5 +151,5 @@ class TelegramWebhookView(APIView):
     def send_telegram_message(self, chat_id, text):
         token = os.getenv("TELEGRAM_BOT_TOKEN")
         url = f"https://api.telegram.org/bot{token}/sendMessage"
-        payload = {"chat_id": chat_id, "text": text}
+        payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
         requests.post(url, json=payload)
