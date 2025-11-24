@@ -306,14 +306,14 @@ def delete_last_expense():
 
     # Get the latest expense
     latest_entry = get_latest_entry(expense_db_id)
-    
+
     if not latest_entry:
         return False, "No expenses found to delete", None
 
     # Extract details before deletion
     page_id = latest_entry["id"]
     properties = latest_entry.get("properties", {})
-    
+
     # Get item name
     item_prop = properties.get("Item", {})
     item_name = ""
@@ -321,11 +321,11 @@ def delete_last_expense():
         title_content = item_prop.get("title", [])
         if title_content:
             item_name = title_content[0].get("plain_text", "Unknown")
-    
+
     # Get amount
     amount_prop = properties.get("Amount", {})
     amount = amount_prop.get("number", 0)
-    
+
     # Get category
     category_prop = properties.get("Category", {})
     category = "Unknown"
@@ -333,18 +333,14 @@ def delete_last_expense():
         select_data = category_prop.get("select", {})
         if select_data:
             category = select_data.get("name", "Unknown")
-    
+
     # Archive the page
     success, message = archive_page(page_id)
-    
+
     if success:
-        details = {
-            "item": item_name,
-            "amount": amount,
-            "category": category
-        }
+        details = {"item": item_name, "amount": amount, "category": category}
         return True, f"Deleted expense: {item_name} - ${amount:.2f}", details
-    
+
     return False, message, None
 
 
@@ -361,14 +357,14 @@ def delete_last_income():
 
     # Get the latest income
     latest_entry = get_latest_entry(income_db_id)
-    
+
     if not latest_entry:
         return False, "No income entries found to delete", None
 
     # Extract details before deletion
     page_id = latest_entry["id"]
     properties = latest_entry.get("properties", {})
-    
+
     # Get source name
     source_prop = properties.get("Source", {})
     source_name = ""
@@ -376,19 +372,16 @@ def delete_last_income():
         title_content = source_prop.get("title", [])
         if title_content:
             source_name = title_content[0].get("plain_text", "Unknown")
-    
+
     # Get amount
     amount_prop = properties.get("Amount", {})
     amount = amount_prop.get("number", 0)
-    
+
     # Archive the page
     success, message = archive_page(page_id)
-    
+
     if success:
-        details = {
-            "source": source_name,
-            "amount": amount
-        }
+        details = {"source": source_name, "amount": amount}
         return True, f"Deleted income: {source_name} - ${amount:.2f}", details
-    
+
     return False, message, None

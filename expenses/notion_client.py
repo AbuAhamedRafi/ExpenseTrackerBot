@@ -218,7 +218,7 @@ def archive_page(page_id):
     try:
         session = get_session()
         response = session.patch(url, json=payload, headers=get_headers(), timeout=25)
-        
+
         if response.status_code == 200:
             return True, "Page archived successfully"
         return False, f"Failed to archive: {response.text}"
@@ -238,15 +238,12 @@ def get_latest_entry(database_id, sorts=None):
         Page object or None if not found
     """
     url = f"https://api.notion.com/v1/databases/{database_id}/query"
-    
+
     # Default sort by creation time, newest first
     if sorts is None:
         sorts = [{"timestamp": "created_time", "direction": "descending"}]
-    
-    payload = {
-        "sorts": sorts,
-        "page_size": 1
-    }
+
+    payload = {"sorts": sorts, "page_size": 1}
 
     try:
         session = get_session()
