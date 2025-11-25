@@ -861,6 +861,22 @@ def execute_autonomous_operation(operation: Dict, user_id: str = None) -> Dict:
     # Cleanup expired confirmations on each call
     ConfirmationManager.cleanup_expired()
 
+    # PRIORITIZE PENDING CONFIRMATIONS
+    # If we have a pending operation and the user is calling a destructive function,
+    # it's likely a confirmation attempt. We check this BEFORE validation because
+    # the confirmation call might be missing details (like page_id) that are in the pending op.
+    if user_id and "operation_type" in operation:
+        pending = ConfirmationManager.get_pending(user_id)
+        if pending:
+            # Check if the current operation matches the pending one's type
+            # (e.g. both are "delete"). This prevents executing a pending delete
+            # if the user switched to "create".
+            if operation["operation_type"] == pending["operation_type"]:
+                # Execute the STORED (valid) operation, not the current (potentially incomplete) one
+                result = SmartExecutor.execute(pending)
+                ConfirmationManager.clear_pending(user_id)
+                return result
+
     # Validate operation
     is_valid, error_msg = OperationValidator.validate(operation)
     if not is_valid:
@@ -869,24 +885,15 @@ def execute_autonomous_operation(operation: Dict, user_id: str = None) -> Dict:
     # Check if this is a destructive operation requiring confirmation
     op_type = operation["operation_type"]
     if op_type in ["delete", "update"] and user_id:
-        # Check if we have a pending confirmation
-        pending = ConfirmationManager.get_pending(user_id)
-
-        if pending:
-            # User is confirming a previous operation
-            # Execute it
-            result = SmartExecutor.execute(pending)
-            ConfirmationManager.clear_pending(user_id)
-            return result
-        else:
-            # Store for confirmation
-            ConfirmationManager.store_pending(user_id, operation)
-            return {
-                "success": False,
-                "requires_confirmation": True,
-                "message": f"This will {op_type} data. Reply 'yes' to confirm.",
-                "operation_details": operation.get("reasoning", ""),
-            }
+        # No pending operation found (already checked above), so this is a NEW request
+        # Store for confirmation
+        ConfirmationManager.store_pending(user_id, operation)
+        return {
+            "success": False,
+            "requires_confirmation": True,
+            "message": f"This will {op_type} data. Reply 'yes' to confirm.",
+            "operation_details": operation.get("reasoning", ""),
+        }
 
     # Execute operation
     return SmartExecutor.execute(operation)
