@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.conf import settings
 from .services import ask_gemini, execute_function_calls
+from .models import TelegramLog
 
 
 class TelegramWebhookView(APIView):
@@ -37,12 +38,12 @@ class TelegramWebhookView(APIView):
                 return Response({"status": "no_text"}, status=status.HTTP_200_OK)
 
             # Save user message to log
-            from .models import TelegramLog
+            # Save user message to log
 
             TelegramLog.objects.create(user_id=str(user_id), role="user", content=text)
 
             # Process with Gemini
-            gemini_response = ask_gemini(text)
+            gemini_response = ask_gemini(text, user_id=str(user_id))
 
             # Extract natural message and function calls
             natural_message = gemini_response.get("message", "")

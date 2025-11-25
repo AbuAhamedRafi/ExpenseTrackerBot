@@ -65,7 +65,7 @@ def get_cached_categories_and_accounts():
     return _cache["categories"]["data"], _cache["accounts"]["data"]
 
 
-def ask_gemini(text):
+def ask_gemini(text, user_id=None):
     """
     Sends text to Gemini with autonomous operation capabilities.
     Gemini can perform ANY Notion operation using the autonomous_operation function.
