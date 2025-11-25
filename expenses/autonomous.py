@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
 from pathlib import Path
+from django.utils import timezone
 
 from .notion_client import (
     get_database_id,
@@ -340,7 +341,7 @@ class ConfirmationManager:
         """Store a pending operation requiring confirmation."""
         from .models import PendingConfirmation
 
-        expires_at = datetime.now() + timedelta(minutes=cls._expiry_minutes)
+        expires_at = timezone.now() + timedelta(minutes=cls._expiry_minutes)
 
         # Update or create
         PendingConfirmation.objects.update_or_create(
@@ -360,7 +361,7 @@ class ConfirmationManager:
             # Note: We use naive datetime comparison or timezone aware depending on settings.
             # Assuming naive for simplicity as per project style, or use timezone.now() if configured.
             # But the project uses datetime.now() elsewhere.
-            if datetime.now().timestamp() > pending.expires_at.timestamp():
+            if timezone.now().timestamp() > pending.expires_at.timestamp():
                 pending.delete()
                 return None
 
@@ -382,7 +383,7 @@ class ConfirmationManager:
 
         # Simple cleanup: delete all where expires_at < now
         # We'll do this safely
-        now = datetime.now()
+        now = timezone.now()
         PendingConfirmation.objects.filter(expires_at__lt=now).delete()
 
 

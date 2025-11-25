@@ -57,11 +57,10 @@ class TelegramWebhookView(APIView):
                     pending_obj = PendingConfirmation.objects.get(user_id=str(user_id))
 
                     # Check expiry (optional, but good practice)
-                    from datetime import datetime
+                    from django.utils import timezone
 
-                    # Use naive comparison if project is naive, or aware if aware.
-                    # Using timestamp comparison to be safe and consistent with autonomous.py
-                    if datetime.now().timestamp() > pending_obj.expires_at.timestamp():
+                    # Use timezone-aware comparison
+                    if timezone.now().timestamp() > pending_obj.expires_at.timestamp():
                         pending_obj.delete()
                         raise PendingConfirmation.DoesNotExist
 
