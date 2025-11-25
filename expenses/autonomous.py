@@ -87,6 +87,13 @@ class SchemaInspector:
             "Expenses": "relation",
             "Checkbox": "checkbox",
         },
+        "payments": {
+            "Name": "title",
+            "Amount": "number",
+            "Date": "date",
+            "From Account": "relation",
+            "To Account": "relation",
+        },
     }
 
     @classmethod
@@ -224,7 +231,7 @@ class OperationValidator:
             "categories",
             "accounts",
             "subscriptions",
-            "transfers",
+            "payments",
         ]:
             return False, f"Unknown database: {database}"
 

@@ -95,6 +95,7 @@ def ask_gemini(text, user_id=None):
                         "categories",
                         "accounts",
                         "subscriptions",
+                        "payments",
                     ],
                     "description": "Target database",
                 },
@@ -168,16 +169,33 @@ You can perform ANY operation on these databases using the autonomous_operation 
 4. **accounts**
    - Name (title), Account Type (select: Bank/Credit Card)
    - Initial Amount, Credit Limit, Utilization (numbers)
-   - Current Balance, Total Income/Expense/Transfer (formulas)
+   - **READ-ONLY (Formulas/Rollups)**: Current Balance, Total Income, Total Expense, Total Transfer In, Total Transfer Out, Credit Utilization
    - Date (date), Payment Account (relation)
 
 5. **subscriptions** (Fixed Expenses Checklist)
    - Name (title), Type (select), Amount (number)
-   - Monthly Cost (formula), Checkbox (checkbox)
+   - **READ-ONLY (Formula)**: Monthly Cost
    - Account, Category (relations), Expenses (relation)
+   - Checkbox (checkbox)
+
+6. **payments** (Credit Card Payments/Transfers)
+   - Name (title), Amount (number), Date (date)
+   - From Account, To Account (relations)
 
 📝 AVAILABLE CATEGORIES: {categories_list}
 💳 AVAILABLE ACCOUNTS: {accounts_list}
+
+🔍 ACCOUNT SHORTCUTS:
+When user mentions an account name in a query WITHOUT explicitly saying "filter by", automatically add the account filter:
+- "Show my BRAC expenses" → Add Accounts relation filter for "BRAC Bank Salary Account"
+- "My credit card spending" → Query accounts DB, identify credit card types, filter expenses by those accounts
+- "What did I buy with UCB?" → Filter by "MasterCard Platinum (UCB)"
+- "BRAC transactions this month" → Filter by "BRAC Bank Salary Account" + date filter (past month)
+
+⚠️ ROLLUP/FORMULA AWARENESS:
+- **NEVER attempt to update** these read-only fields: Current Balance, Total Income, Total Expense, Total Transfer In/Out, Credit Utilization, Monthly Cost, Monthly Expense
+- **Use them for summaries**: "What's my credit card balance?" → Query the account page, read the `Current Balance` rollup directly
+- **Don't manually calculate**: If the data exists in a rollup/formula, use it instead of summing expenses yourself
 
 🧠 LOGIC & MAPPINGS:
 1. **Payback Logic**:
@@ -197,17 +215,37 @@ You can perform ANY operation on these databases using the autonomous_operation 
    - Since there is no 'transfers' database, handle transfers as:
      - **Transfer Out**: Create an Expense in the source account.
      - **Transfer In**: Create an Income in the destination account.
-     - **Payment to Person**: Create an Expense.
+     - **Credit Card Payment**: Create a **Payment** in the 'payments' database.
+       - Set 'From Account' to the source (e.g., Bank).
+       - Set 'To Account' to the destination (e.g., Credit Card).
 
-4. **Subscription Payment Workflow (CRITICAL)**:
+4. **Subscription Payment Workflow (CRITICAL - Month-Aware)**:
    - When user says "Pay [Subscription Name]":
-     1. **QUERY FIRST**: Search 'subscriptions' DB for that name.
-     2. **CHECK STATUS**: Look at the 'Checkbox' property.
-     3. **IF CHECKED (True)**: STOP. Reply: "⚠️ You already paid [Name] this month!"
-     4. **IF UNCHECKED (False)**:
-        - **Create Expense**: Add to 'expenses' DB. IMPORTANT: Link it to the subscription using the 'Subscriptions' relation (use the ID found in step 1).
-        - **Update Subscription**: Update 'subscriptions' DB -> Set 'Checkbox' to True.
-        - Reply: "✅ Paid [Name] and marked as checked."
+     1. **QUERY SUBSCRIPTION**: Search 'subscriptions' DB for that name (e.g., "Netflix")
+     2. **GET SUBSCRIPTION ID**: Save the page ID for linking
+     3. **CHECK STATUS**: Look at the 'Checkbox' property
+     4. **IF CHECKED (True)**:
+        a. **QUERY LINKED EXPENSES**: Search 'expenses' DB with:
+           - Filter by `Subscriptions` relation = subscription ID (from step 2)
+           - Filter by `Name` contains subscription name (e.g., "Netflix")
+           - Sort by Date descending (most recent first)
+        b. **GET MOST RECENT EXPENSE**: Take the first result
+        c. **EXTRACT PAYMENT MONTH**: Get the month from the expense Date (format: "YYYY-MM", e.g., "2025-11")
+        d. **GET CURRENT MONTH**: Format today's date as "YYYY-MM"
+        e. **COMPARE MONTHS**:
+           - If **SAME MONTH** → STOP. Reply: "⚠️ You already paid [Name] this month! Last payment: [date]"
+           - If **DIFFERENT MONTH** (e.g., last was "2025-10", now "2025-11") → CONTINUE to step 5
+     5. **IF UNCHECKED OR NEW MONTH**:
+        a. **UNCHECK** (if it was checked): Update 'subscriptions' DB -> Set Checkbox = False
+        b. **CREATE EXPENSE**: Add to 'expenses' DB:
+           - Name: "[Subscription Name]"
+           - Amount: (from subscription record)
+           - Date: Today's date ({current_date})
+           - Accounts: (from subscription record)
+           - Categories: (from subscription record)
+           - **Subscriptions** relation: Link to subscription ID from step 2
+        c. **RE-CHECK**: Update 'subscriptions' DB -> Set Checkbox = True
+        d. Reply: "✅ Paid [Name] for this month and marked as checked."
 
 🔍 NOTION FILTER SYNTAX EXAMPLES:
 
