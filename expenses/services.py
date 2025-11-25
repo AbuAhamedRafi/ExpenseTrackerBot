@@ -95,7 +95,6 @@ def ask_gemini(text):
                         "categories",
                         "accounts",
                         "subscriptions",
-                        "transfers",
                     ],
                     "description": "Target database",
                 },
@@ -131,6 +130,7 @@ def ask_gemini(text):
     # Get current date in UTC+6 (Bangladesh Standard Time)
     # This ensures "today" matches the user's local time, not the server's UTC time
     from datetime import timedelta
+    from .models import TelegramLog
 
     utc_now = datetime.utcnow()
     bd_time = utc_now + timedelta(hours=6)
@@ -176,12 +176,28 @@ You can perform ANY operation on these databases using the autonomous_operation 
    - Monthly Cost (formula), Checkbox (checkbox)
    - Account, Category (relations)
 
-6. **transfers** (Pay/Transfer)
-   - Name (title), Amount (number), Date (date)
-   - From Account, To Account (relations)
-
 📝 AVAILABLE CATEGORIES: {categories_list}
 💳 AVAILABLE ACCOUNTS: {accounts_list}
+
+🧠 LOGIC & MAPPINGS:
+1. **Payback Logic**:
+   - "Payback TO [Person]" -> Expense (Category: "Payback" or similar, or just "Others" if not found).
+   - "Payback FROM [Person]" -> Income.
+   - "Paid back [Person]" -> Expense.
+   - "Got back from [Person]" -> Income.
+
+2. **Category Mapping**:
+   - Map specific items to broader categories if exact match missing.
+   - "Snacks", "Lunch", "Dinner", "Groceries" -> "Food"
+   - "Uber", "Pathao", "Rickshaw", "Bus" -> "Transport"
+   - "Mobile Bill", "Internet", "Electricity" -> "Bills"
+   - "Medicine", "Doctor" -> "Health"
+
+3. **Transfer Logic**:
+   - Since there is no 'transfers' database, handle transfers as:
+     - **Transfer Out**: Create an Expense in the source account.
+     - **Transfer In**: Create an Income in the destination account.
+     - **Payment to Person**: Create an Expense.
 
 🔍 NOTION FILTER SYNTAX EXAMPLES:
 
@@ -222,16 +238,16 @@ User: "I took a pathao ride for 120 taka"
 → autonomous_operation(
     operation_type="create",
     database="expenses",
-    data={{"Name": "Pathao Ride", "Amount": 120, "Categories": "Transportation", "Date": "{current_date}"}},
+    data={{"Name": "Pathao Ride", "Amount": 120, "Categories": "Transport", "Date": "{current_date}"}},
     reasoning="Creating transportation expense"
   )
 
 User: "Transfer 5000 from BRAC to XYZ Credit Card"
 → autonomous_operation(
     operation_type="create",
-    database="transfers",
-    data={{"Name": "Transfer to XYZ", "Amount": 5000, "From Account": "BRAC Bank Salary Account", "To Account": "XYZ Credit Card", "Date": "{current_date}"}},
-    reasoning="Creating transfer record"
+    database="expenses",
+    data={{"Name": "Transfer to XYZ", "Amount": 5000, "Accounts": "BRAC Bank Salary Account", "Categories": "Transfer", "Date": "{current_date}"}},
+    reasoning="Creating transfer expense from BRAC"
   )
 
 User: "Add a new category called Gifts with 2000 budget"
@@ -259,6 +275,14 @@ User: "What's my average daily spending?"
     reasoning="Calculating average daily spending"
   )
 
+User: "I paid back 200 to Farha apu"
+→ autonomous_operation(
+    operation_type="create",
+    database="expenses",
+    data={{"Name": "Payback to Farha apu", "Amount": 200, "Categories": "Others", "Date": "{current_date}"}},
+    reasoning="Creating expense for payback"
+  )
+
 🎭 PERSONALITY & BEHAVIOR:
 - Be conversational and natural in your responses
 - Use emojis occasionally (but not excessively)
@@ -272,7 +296,7 @@ User: "What's my average daily spending?"
 1. **Smart Defaults vs. Questions**:
    - Small expense (< 500) & missing account? -> Use "BRAC Bank Salary Account"
    - Large expense (> 500) & missing account? -> ASK "Which account did you use?"
-   - Ambiguous category? -> Infer from context (e.g., "pathao" = Transportation)
+   - Ambiguous category? -> Infer from context (e.g., "pathao" = Transport)
    - Missing date? -> Use today's date ({current_date})
 2. For simple expenses/income, use autonomous_operation with operation_type="create"
 3. For queries, use autonomous_operation with operation_type="query" or "analyze"
@@ -294,8 +318,23 @@ User: "What's my average daily spending?"
         system_instruction=system_instruction,
     )
 
+    # Build chat history from TelegramLog
+    history = []
+    if user_id:
+        # Get last 10 messages
+        logs = TelegramLog.objects.filter(user_id=str(user_id)).order_by("-timestamp")[
+            :10
+        ]
+        # Reorder to chronological
+        logs = reversed(logs)
+
+        for log in logs:
+            role = "user" if log.role == "user" else "model"
+            history.append({"role": role, "parts": [log.content]})
+
     try:
-        response = model.generate_content(text)
+        chat = model.start_chat(history=history)
+        response = chat.send_message(text)
 
         # Check if Gemini wants to call functions
         function_calls = []

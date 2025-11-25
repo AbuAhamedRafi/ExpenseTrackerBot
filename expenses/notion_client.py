@@ -156,6 +156,9 @@ def find_page_by_name(database_id, name_value):
     Returns:
         Page ID if found, None otherwise
     """
+    if not isinstance(name_value, str):
+        return None
+
     pages = query_database(database_id)
     name_lower = name_value.lower().strip()
 

@@ -85,13 +85,6 @@ class SchemaInspector:
             "Category": "relation",
             "Checkbox": "checkbox",
         },
-        "transfers": {
-            "Date": "date",
-            "Name": "title",
-            "Amount": "number",
-            "From Account": "relation",
-            "To Account": "relation",
-        },
     }
 
     @classmethod

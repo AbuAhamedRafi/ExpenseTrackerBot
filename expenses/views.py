@@ -36,6 +36,11 @@ class TelegramWebhookView(APIView):
             if not text:
                 return Response({"status": "no_text"}, status=status.HTTP_200_OK)
 
+            # Save user message to log
+            from .models import TelegramLog
+
+            TelegramLog.objects.create(user_id=str(user_id), role="user", content=text)
+
             # Process with Gemini
             gemini_response = ask_gemini(text)
 
@@ -46,6 +51,10 @@ class TelegramWebhookView(APIView):
             # Always send Gemini's natural response first
             if natural_message:
                 self.send_telegram_message(chat_id, natural_message)
+                # Save model response to log
+                TelegramLog.objects.create(
+                    user_id=str(user_id), role="model", content=natural_message
+                )
 
             # If no function calls, we're done (pure conversation)
             if not function_calls:
@@ -69,6 +78,11 @@ class TelegramWebhookView(APIView):
                         if result.get("operation_details"):
                             reply_text += f"\n\n{result['operation_details']}"
                         self.send_telegram_message(chat_id, reply_text)
+
+                        # Log the confirmation request
+                        TelegramLog.objects.create(
+                            user_id=str(user_id), role="model", content=reply_text
+                        )
 
                     elif result.get("success"):
                         # Operation succeeded
@@ -118,6 +132,11 @@ class TelegramWebhookView(APIView):
 
                         self.send_telegram_message(chat_id, reply_text)
 
+                        # Log the success message
+                        TelegramLog.objects.create(
+                            user_id=str(user_id), role="model", content=reply_text
+                        )
+
                     else:
                         # Operation failed
                         error_msg = result.get("message", "Something went wrong")
@@ -127,6 +146,11 @@ class TelegramWebhookView(APIView):
                             reply_text += "\n\nI'll try to fix this..."
 
                         self.send_telegram_message(chat_id, reply_text)
+
+                        # Log the error message
+                        TelegramLog.objects.create(
+                            user_id=str(user_id), role="model", content=reply_text
+                        )
 
             return Response({"status": "success"}, status=status.HTTP_200_OK)
 
