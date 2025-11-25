@@ -41,6 +41,7 @@ class SchemaInspector:
             "Date": "date",
             "Accounts": "relation",
             "Categories": "relation",
+            "Subscriptions": "relation",
             "Year": "formula",
             "Monthly": "formula",
             "Weekly": "formula",
@@ -83,6 +84,7 @@ class SchemaInspector:
             "Monthly Cost": "formula",
             "Account": "relation",
             "Category": "relation",
+            "Expenses": "relation",
             "Checkbox": "checkbox",
         },
     }

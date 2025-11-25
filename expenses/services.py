@@ -153,7 +153,7 @@ You can perform ANY operation on these databases using the autonomous_operation 
 
 1. **expenses**
    - Name (title), Amount (number), Date (date)
-   - Accounts (relation), Categories (relation)
+   - Accounts (relation), Categories (relation), Subscriptions (relation)
    - Year, Monthly, Weekly, Misc (formulas)
 
 2. **income**
@@ -174,7 +174,7 @@ You can perform ANY operation on these databases using the autonomous_operation 
 5. **subscriptions** (Fixed Expenses Checklist)
    - Name (title), Type (select), Amount (number)
    - Monthly Cost (formula), Checkbox (checkbox)
-   - Account, Category (relations)
+   - Account, Category (relations), Expenses (relation)
 
 📝 AVAILABLE CATEGORIES: {categories_list}
 💳 AVAILABLE ACCOUNTS: {accounts_list}
@@ -198,6 +198,16 @@ You can perform ANY operation on these databases using the autonomous_operation 
      - **Transfer Out**: Create an Expense in the source account.
      - **Transfer In**: Create an Income in the destination account.
      - **Payment to Person**: Create an Expense.
+
+4. **Subscription Payment Workflow (CRITICAL)**:
+   - When user says "Pay [Subscription Name]":
+     1. **QUERY FIRST**: Search 'subscriptions' DB for that name.
+     2. **CHECK STATUS**: Look at the 'Checkbox' property.
+     3. **IF CHECKED (True)**: STOP. Reply: "⚠️ You already paid [Name] this month!"
+     4. **IF UNCHECKED (False)**:
+        - **Create Expense**: Add to 'expenses' DB. IMPORTANT: Link it to the subscription using the 'Subscriptions' relation (use the ID found in step 1).
+        - **Update Subscription**: Update 'subscriptions' DB -> Set 'Checkbox' to True.
+        - Reply: "✅ Paid [Name] and marked as checked."
 
 🔍 NOTION FILTER SYNTAX EXAMPLES:
 
