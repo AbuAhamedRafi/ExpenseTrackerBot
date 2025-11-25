@@ -37,6 +37,14 @@ class TelegramWebhookView(APIView):
             if not text:
                 return Response({"status": "no_text"}, status=status.HTTP_200_OK)
 
+            # Check for reply context
+            reply_to = message.get("reply_to_message", {})
+            reply_text = reply_to.get("text", "")
+
+            if reply_text:
+                # Append reply context to the text
+                text = f"{text}\n\n[Context - User replied to]: {reply_text}"
+
             # Save user message to log
             TelegramLog.objects.create(user_id=str(user_id), role="user", content=text)
 

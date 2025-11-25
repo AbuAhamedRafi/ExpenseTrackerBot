@@ -753,6 +753,12 @@ class SmartExecutor:
             props = page.get("properties", {})
             formatted_page = {}
 
+            # Include Metadata
+            formatted_page["id"] = page.get("id")
+            formatted_page["created_time"] = page.get("created_time")
+            formatted_page["last_edited_time"] = page.get("last_edited_time")
+            formatted_page["url"] = page.get("url")
+
             for prop_name, prop_data in props.items():
                 prop_type = prop_data.get("type")
 
@@ -781,9 +787,9 @@ class SmartExecutor:
                             item.get("name") for item in multi_select
                         ]
                     elif prop_type == "relation":
-                        # Just return count of relations, not the full objects
+                        # Return list of relation IDs for context
                         relations = prop_data.get("relation", [])
-                        formatted_page[prop_name] = len(relations)
+                        formatted_page[prop_name] = [r.get("id") for r in relations]
                     elif prop_type == "formula":
                         # Extract the computed value from formula
                         formula = prop_data.get("formula", {})
@@ -805,9 +811,17 @@ class SmartExecutor:
                         if rollup_type == "number":
                             formatted_page[prop_name] = rollup.get("number")
                         elif rollup_type == "array":
-                            # Skip complex arrays
-                            formatted_page[prop_name] = len(rollup.get("array", []))
-                    # Skip other complex types (files, people, etc.)
+                            # Try to extract values from array
+                            array_items = rollup.get("array", [])
+                            # Simplify: just return the raw list of values if simple
+                            formatted_page[prop_name] = array_items
+                    elif prop_type == "url":
+                        formatted_page[prop_name] = prop_data.get("url")
+                    elif prop_type == "email":
+                        formatted_page[prop_name] = prop_data.get("email")
+                    elif prop_type == "phone_number":
+                        formatted_page[prop_name] = prop_data.get("phone_number")
+
                 except Exception:
                     # If any property fails to format, skip it
                     continue
