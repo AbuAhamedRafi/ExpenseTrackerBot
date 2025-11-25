@@ -38,9 +38,27 @@ class TelegramWebhookView(APIView):
                 return Response({"status": "no_text"}, status=status.HTTP_200_OK)
 
             # Save user message to log
-            # Save user message to log
-
             TelegramLog.objects.create(user_id=str(user_id), role="user", content=text)
+
+            # Check for explicit confirmation override
+            if text.lower().strip() in ["yes", "y", "confirm", "sure", "ok", "do it"]:
+                from .autonomous import ConfirmationManager, SmartExecutor
+
+                pending = ConfirmationManager.get_pending(str(user_id))
+
+                if pending:
+                    # Execute the pending operation directly
+                    result = SmartExecutor.execute(pending)
+                    ConfirmationManager.clear_pending(str(user_id))
+
+                    # Wrap in the format expected by the response handler
+                    execution_results = [
+                        {"function": "autonomous_operation", "result": result}
+                    ]
+
+                    # Process results directly
+                    self._handle_execution_results(chat_id, user_id, execution_results)
+                    return Response({"status": "success"}, status=status.HTTP_200_OK)
 
             # Process with Gemini
             gemini_response = ask_gemini(text, user_id=str(user_id))
@@ -66,92 +84,8 @@ class TelegramWebhookView(APIView):
                 function_calls, user_id=str(user_id)
             )
 
-            # Process each function result
-            for exec_result in execution_results:
-                func_name = exec_result["function"]
-                result = exec_result["result"]
-
-                if func_name == "autonomous_operation":
-                    # Handle autonomous operation results
-                    if result.get("requires_confirmation"):
-                        # Operation needs confirmation
-                        reply_text = f"⚠️ {result.get('message', 'Confirm this action')}"
-                        if result.get("operation_details"):
-                            reply_text += f"\n\n{result['operation_details']}"
-                        self.send_telegram_message(chat_id, reply_text)
-
-                        # Log the confirmation request
-                        TelegramLog.objects.create(
-                            user_id=str(user_id), role="model", content=reply_text
-                        )
-
-                    elif result.get("success"):
-                        # Operation succeeded
-                        message = result.get("message", "Done!")
-                        data = result.get("data")
-
-                        # Format response based on data
-                        if data:
-                            if isinstance(data, list):
-                                # Query results
-                                if len(data) == 0:
-                                    reply_text = f"✅ {message}\n\nNo results found."
-                                else:
-                                    reply_text = f"✅ {message}\n\nFound {len(data)} result(s):\n"
-                                    for i, item in enumerate(
-                                        data[:10], 1
-                                    ):  # Limit to 10
-                                        # Format each item
-                                        name = item.get("Name", "Unknown")
-                                        amount = item.get("Amount")
-                                        date = item.get("Date", "")
-
-                                        if amount is not None:
-                                            reply_text += f"{i}. {name}: ${amount:.2f}"
-                                        else:
-                                            reply_text += f"{i}. {name}"
-
-                                        if date:
-                                            reply_text += f" ({date[:10]})"
-                                        reply_text += "\n"
-
-                                    if len(data) > 10:
-                                        reply_text += f"\n... and {len(data) - 10} more"
-
-                            elif isinstance(data, dict):
-                                # Single result or analytics
-                                reply_text = f"✅ {message}\n\n"
-                                for key, value in data.items():
-                                    if isinstance(value, (int, float)):
-                                        reply_text += f"{key}: ${value:.2f}\n"
-                                    else:
-                                        reply_text += f"{key}: {value}\n"
-                            else:
-                                reply_text = f"✅ {message}"
-                        else:
-                            reply_text = f"✅ {message}"
-
-                        self.send_telegram_message(chat_id, reply_text)
-
-                        # Log the success message
-                        TelegramLog.objects.create(
-                            user_id=str(user_id), role="model", content=reply_text
-                        )
-
-                    else:
-                        # Operation failed
-                        error_msg = result.get("message", "Something went wrong")
-                        reply_text = f"❌ {error_msg}"
-
-                        if result.get("retry_suggested"):
-                            reply_text += "\n\nI'll try to fix this..."
-
-                        self.send_telegram_message(chat_id, reply_text)
-
-                        # Log the error message
-                        TelegramLog.objects.create(
-                            user_id=str(user_id), role="model", content=reply_text
-                        )
+            # Process results
+            self._handle_execution_results(chat_id, user_id, execution_results)
 
             return Response({"status": "success"}, status=status.HTTP_200_OK)
 
@@ -164,6 +98,96 @@ class TelegramWebhookView(APIView):
                 {"status": "error", "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+    def _handle_execution_results(self, chat_id, user_id, execution_results):
+        """Process execution results and send messages."""
+        from .models import TelegramLog
+
+        for exec_result in execution_results:
+            func_name = exec_result["function"]
+            result = exec_result["result"]
+
+            if func_name == "autonomous_operation":
+                # Handle autonomous operation results
+                if result.get("requires_confirmation"):
+                    # Operation needs confirmation
+                    reply_text = f"⚠️ {result.get('message', 'Confirm this action')}"
+                    if result.get("operation_details"):
+                        reply_text += f"\n\n{result['operation_details']}"
+                    self.send_telegram_message(chat_id, reply_text)
+
+                    # Log the confirmation request
+                    TelegramLog.objects.create(
+                        user_id=str(user_id), role="model", content=reply_text
+                    )
+
+                elif result.get("success"):
+                    # Operation succeeded
+                    message = result.get("message", "Done!")
+                    data = result.get("data")
+
+                    # Format response based on data
+                    if data:
+                        if isinstance(data, list):
+                            # Query results
+                            if len(data) == 0:
+                                reply_text = f"✅ {message}\n\nNo results found."
+                            else:
+                                reply_text = (
+                                    f"✅ {message}\n\nFound {len(data)} result(s):\n"
+                                )
+                                for i, item in enumerate(data[:10], 1):  # Limit to 10
+                                    # Format each item
+                                    name = item.get("Name", "Unknown")
+                                    amount = item.get("Amount")
+                                    date = item.get("Date", "")
+
+                                    if amount is not None:
+                                        reply_text += f"{i}. {name}: ${amount:.2f}"
+                                    else:
+                                        reply_text += f"{i}. {name}"
+
+                                    if date:
+                                        reply_text += f" ({date[:10]})"
+                                    reply_text += "\n"
+
+                                if len(data) > 10:
+                                    reply_text += f"\n... and {len(data) - 10} more"
+
+                        elif isinstance(data, dict):
+                            # Single result or analytics
+                            reply_text = f"✅ {message}\n\n"
+                            for key, value in data.items():
+                                if isinstance(value, (int, float)):
+                                    reply_text += f"{key}: ${value:.2f}\n"
+                                else:
+                                    reply_text += f"{key}: {value}\n"
+                        else:
+                            reply_text = f"✅ {message}"
+                    else:
+                        reply_text = f"✅ {message}"
+
+                    self.send_telegram_message(chat_id, reply_text)
+
+                    # Log the success message
+                    TelegramLog.objects.create(
+                        user_id=str(user_id), role="model", content=reply_text
+                    )
+
+                else:
+                    # Operation failed
+                    error_msg = result.get("message", "Something went wrong")
+                    reply_text = f"❌ {error_msg}"
+
+                    if result.get("retry_suggested"):
+                        reply_text += "\n\nI'll try to fix this..."
+
+                    self.send_telegram_message(chat_id, reply_text)
+
+                    # Log the error message
+                    TelegramLog.objects.create(
+                        user_id=str(user_id), role="model", content=reply_text
+                    )
 
     def send_telegram_message(self, chat_id, text):
         token = os.getenv("TELEGRAM_BOT_TOKEN")
