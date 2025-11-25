@@ -318,90 +318,65 @@ class OperationValidator:
 # ============================================================================
 
 
-class ConfirmationManager:
-    """Manages pending confirmations for destructive operations."""
+# ============================================================================
+# CONFIRMATION MANAGER - Handle destructive operation confirmations
+# ============================================================================
 
-    _file_path = Path("pending_confirmations.json")
+
+class ConfirmationManager:
+    """Manages pending confirmations for destructive operations using Database."""
+
     _expiry_minutes = 5
 
     @classmethod
     def store_pending(cls, user_id: str, operation: Dict) -> None:
         """Store a pending operation requiring confirmation."""
-        # Load existing
-        data = cls._load()
+        from .models import PendingConfirmation
 
-        # Add new pending operation
-        data[str(user_id)] = {
-            "operation": operation,
-            "expires_at": (
-                datetime.now() + timedelta(minutes=cls._expiry_minutes)
-            ).timestamp(),
-        }
+        expires_at = datetime.now() + timedelta(minutes=cls._expiry_minutes)
 
-        # Save
-        cls._save(data)
+        # Update or create
+        PendingConfirmation.objects.update_or_create(
+            user_id=str(user_id),
+            defaults={"operation_data": operation, "expires_at": expires_at},
+        )
 
     @classmethod
     def get_pending(cls, user_id: str) -> Optional[Dict]:
         """Get pending operation for a user."""
-        data = cls._load()
-        pending = data.get(str(user_id))
+        from .models import PendingConfirmation
 
-        if not pending:
+        try:
+            pending = PendingConfirmation.objects.get(user_id=str(user_id))
+
+            # Check if expired
+            # Note: We use naive datetime comparison or timezone aware depending on settings.
+            # Assuming naive for simplicity as per project style, or use timezone.now() if configured.
+            # But the project uses datetime.now() elsewhere.
+            if datetime.now().timestamp() > pending.expires_at.timestamp():
+                pending.delete()
+                return None
+
+            return pending.operation_data
+        except PendingConfirmation.DoesNotExist:
             return None
-
-        # Check if expired
-        if datetime.now().timestamp() > pending["expires_at"]:
-            cls.clear_pending(user_id)
-            return None
-
-        return pending["operation"]
 
     @classmethod
     def clear_pending(cls, user_id: str) -> None:
         """Clear pending operation for a user."""
-        data = cls._load()
-        if str(user_id) in data:
-            del data[str(user_id)]
-            cls._save(data)
+        from .models import PendingConfirmation
+
+        PendingConfirmation.objects.filter(user_id=str(user_id)).delete()
 
     @classmethod
     def cleanup_expired(cls) -> None:
         """Remove all expired pending operations."""
-        data = cls._load()
-        current_time = datetime.now().timestamp()
+        from .models import PendingConfirmation
 
-        # Find expired entries
-        expired_users = [
-            user_id
-            for user_id, pending in data.items()
-            if current_time > pending["expires_at"]
-        ]
-
-        # Remove them
-        for user_id in expired_users:
-            del data[user_id]
-
-        if expired_users:
-            cls._save(data)
-
-    @classmethod
-    def _load(cls) -> Dict:
-        """Load pending confirmations from file."""
-        if not cls._file_path.exists():
-            return {}
-
-        try:
-            with open(cls._file_path, "r") as f:
-                return json.load(f)
-        except:
-            return {}
-
-    @classmethod
-    def _save(cls, data: Dict) -> None:
-        """Save pending confirmations to file."""
-        with open(cls._file_path, "w") as f:
-            json.dump(data, f, indent=2)
+        # Simple cleanup: delete all where expires_at < now
+        # We'll do this safely
+        now = datetime.now()
+        PendingConfirmation.objects.filter(expires_at__lt=now).delete()
 
 
 # ============================================================================

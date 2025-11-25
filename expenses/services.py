@@ -329,21 +329,33 @@ User: "I paid back 200 to Farha apu"
     )
 
     # Build chat history from TelegramLog
-    history = []
-    if user_id:
-        # Get last 10 messages
-        logs = TelegramLog.objects.filter(user_id=str(user_id)).order_by("-timestamp")[
-            :10
-        ]
-        # Reorder to chronological
-        logs = reversed(logs)
+    # We fetch the last 10 messages to maintain context
+    history = TelegramLog.objects.filter(user_id=str(user_id)).order_by("-timestamp")[
+        :10
+    ]
 
-        for log in logs:
-            role = "user" if log.role == "user" else "model"
-            history.append({"role": role, "parts": [log.content]})
+    # Convert to Gemini format
+    chat_history = []
+    # History is in reverse chronological order, so we need to reverse it back
+    for log in reversed(history):
+        role = "user" if log.role == "user" else "model"
+        content = log.content
+
+        # Inject system context (metadata) if available for model responses
+        if log.role == "model" and log.metadata:
+            import json
+
+            try:
+                # Add context about the data found/modified
+                context_str = f"\n\n[System Context - Data from previous action]: {json.dumps(log.metadata)}"
+                content += context_str
+            except:
+                pass
+
+        chat_history.append({"role": role, "parts": [content]})
 
     try:
-        chat = model.start_chat(history=history)
+        chat = model.start_chat(history=chat_history)
         response = chat.send_message(text)
 
         # Check if Gemini wants to call functions

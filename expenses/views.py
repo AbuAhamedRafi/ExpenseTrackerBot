@@ -42,14 +42,24 @@ class TelegramWebhookView(APIView):
 
             # Check for explicit confirmation override
             if text.lower().strip() in ["yes", "y", "confirm", "sure", "ok", "do it"]:
-                from .autonomous import ConfirmationManager, SmartExecutor
+                from .models import PendingConfirmation
+                from .autonomous import SmartExecutor
 
-                pending = ConfirmationManager.get_pending(str(user_id))
+                try:
+                    pending_obj = PendingConfirmation.objects.get(user_id=str(user_id))
 
-                if pending:
-                    # Execute the pending operation directly
-                    result = SmartExecutor.execute(pending)
-                    ConfirmationManager.clear_pending(str(user_id))
+                    # Check expiry (optional, but good practice)
+                    from datetime import datetime
+
+                    # Use naive comparison if project is naive, or aware if aware.
+                    # Using timestamp comparison to be safe and consistent with autonomous.py
+                    if datetime.now().timestamp() > pending_obj.expires_at.timestamp():
+                        pending_obj.delete()
+                        raise PendingConfirmation.DoesNotExist
+
+                    # Execute
+                    result = SmartExecutor.execute(pending_obj.operation_data)
+                    pending_obj.delete()
 
                     # Wrap in the format expected by the response handler
                     execution_results = [
@@ -59,6 +69,9 @@ class TelegramWebhookView(APIView):
                     # Process results directly
                     self._handle_execution_results(chat_id, user_id, execution_results)
                     return Response({"status": "success"}, status=status.HTTP_200_OK)
+
+                except PendingConfirmation.DoesNotExist:
+                    pass  # Fall through to Gemini
 
             # Process with Gemini
             gemini_response = ask_gemini(text, user_id=str(user_id))
@@ -169,9 +182,12 @@ class TelegramWebhookView(APIView):
 
                     self.send_telegram_message(chat_id, reply_text)
 
-                    # Log the success message
+                    # Log the success message AND metadata (tool output)
                     TelegramLog.objects.create(
-                        user_id=str(user_id), role="model", content=reply_text
+                        user_id=str(user_id),
+                        role="model",
+                        content=reply_text,
+                        metadata=data,  # Store the raw data (including IDs) for context
                     )
 
                 else:
