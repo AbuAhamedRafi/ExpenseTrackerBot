@@ -36,6 +36,19 @@ class SchemaInspector:
 
     # Fallback schemas if Notion API fails
     _fallback_schemas = {
+        "loans": {
+            "Name": "title",
+            "Total Debt Value": "number",
+            "Start Date": "date",
+            "Lender/Source": "select",
+            "Repayments": "relation",
+            "Disbursements": "relation",
+            "Related Account": "relation",
+            "Total Paid": "rollup",
+            "Remaining Balance": "formula",
+            "Progress Bar": "formula",
+            "Status": "formula",
+        },
         "expenses": {
             "Name": "title",
             "Amount": "number",
@@ -43,6 +56,7 @@ class SchemaInspector:
             "Accounts": "relation",
             "Categories": "relation",
             "Subscriptions": "relation",
+            "Loan Repayment": "relation",
             "Year": "formula",
             "Monthly": "formula",
             "Weekly": "formula",
@@ -53,6 +67,7 @@ class SchemaInspector:
             "Amount": "number",
             "Date": "date",
             "Accounts": "relation",
+            "Loan Disbursement": "relation",
             "Misc": "text",
         },
         "categories": {
@@ -76,6 +91,7 @@ class SchemaInspector:
             "Credit Utilization": "formula",
             "Date": "date",
             "Payment Account": "relation",
+            "Linked Loans": "relation",
             "Utilization": "number",
         },
         "subscriptions": {
@@ -233,6 +249,7 @@ class OperationValidator:
             "accounts",
             "subscriptions",
             "payments",
+            "loans",
         ]:
             return False, f"Unknown database: {database}"
 
@@ -520,6 +537,14 @@ class SmartExecutor:
                 "Category": "categories",
                 "Account": "accounts",
                 "Payment Account": "accounts",
+                "Subscriptions": "subscriptions",
+                "Expenses": "expenses",
+                "Loan Repayment": "loans",
+                "Loan Disbursement": "loans",
+                "Linked Loans": "loans",
+                "Repayments": "expenses",
+                "Disbursements": "income",
+                "Related Account": "accounts",
             }
 
             target_db = relation_map.get(prop_name)
@@ -738,6 +763,14 @@ class SmartExecutor:
             "From Account": "accounts",
             "To Account": "accounts",
             "Payment Account": "accounts",
+            "Subscriptions": "subscriptions",
+            "Expenses": "expenses",
+            "Loan Repayment": "loans",
+            "Loan Disbursement": "loans",
+            "Linked Loans": "loans",
+            "Repayments": "expenses",
+            "Disbursements": "income",
+            "Related Account": "accounts",
         }
 
         target_db = relation_map.get(property_name)

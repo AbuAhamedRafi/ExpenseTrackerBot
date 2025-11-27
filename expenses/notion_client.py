@@ -66,6 +66,7 @@ def get_database_id(db_type):
         "categories": "NOTION_CATEGORIES_DB_ID",
         "subscriptions": "NOTION_SUBSCRIPTIONS_DB_ID",
         "payments": "NOTION_PAYMENTS_DB_ID",
+        "loans": "NOTION_LOANS_DB_ID",
     }
     env_key = db_map.get(db_type)
     return os.getenv(env_key) if env_key else None

@@ -179,6 +179,7 @@ NOTION_CATEGORIES_DB_ID=your_categories_database_id
 NOTION_ACCOUNTS_DB_ID=your_accounts_database_id
 NOTION_SUBSCRIPTIONS_DB_ID=your_subscriptions_database_id
 NOTION_PAYMENTS_DB_ID=your_payments_database_id
+NOTION_LOANS_DB_ID=your_loans_database_id
 
 # Django Settings
 SECRET_KEY=your_django_secret_key
@@ -351,6 +352,7 @@ ExpenseTrackerBot/
    - Categories (Relation to Categories DB)
    - Accounts (Relation to Accounts DB)
    - Subscriptions (Relation to Subscriptions DB) - Optional
+   - Loan Repayment (Relation to Loans DB) - Optional
    - Year, Monthly, Weekly, Misc (Formulas) - Optional
 
 2. **Income Database**
@@ -359,6 +361,7 @@ ExpenseTrackerBot/
    - Amount (Number)
    - Date (Date)
    - Accounts (Relation to Accounts DB)
+   - Loan Disbursement (Relation to Loans DB) - Optional
    - Misc (Text) - Optional
 
 3. **Categories Database**
@@ -373,6 +376,7 @@ ExpenseTrackerBot/
    - Account Type (Select: Bank/Credit Card) - Optional
    - Initial Amount, Credit Limit, Utilization (Numbers) - Optional
    - Current Balance, Total Income, Total Expense (Formulas/Rollups) - Optional
+   - Linked Loans (Relation to Loans DB) - Optional
 
 5. **Subscriptions Database** (Optional - for fixed expense tracking)
 
@@ -384,11 +388,25 @@ ExpenseTrackerBot/
    - Expenses (Relation to Expenses DB)
 
 6. **Payments Database** (Optional - for transfers/credit card payments)
+
    - Name (Title)
    - Amount (Number)
    - Date (Date)
    - From Account (Relation to Accounts DB)
    - To Account (Relation to Accounts DB)
+
+7. **Loans Database** (Optional - for debt/loan tracking)
+   - Name (Title)
+   - Total Debt Value (Number) - Total amount to pay back (Principal + Interest)
+   - Start Date (Date)
+   - Lender/Source (Select) - Bank, Friend, etc.
+   - Repayments (Relation to Expenses DB) - Synced relation
+   - Disbursements (Relation to Income DB) - Synced relation
+   - Related Account (Relation to Accounts DB)
+   - Total Paid (Rollup) - Sum of Amount from Repayments
+   - Remaining Balance (Formula) - Total Debt Value - Total Paid
+   - Progress Bar (Formula) - Total Paid / Total Debt Value
+   - Status (Formula) - "Paid Off" or "Active"
 
 **Note**: The bot dynamically inspects schemas, so property names can vary. It will validate against your actual database structure.
 
