@@ -65,6 +65,8 @@ def get_database_id(db_type):
         "accounts": "NOTION_ACCOUNTS_DB_ID",
         "categories": "NOTION_CATEGORIES_DB_ID",
         "subscriptions": "NOTION_SUBSCRIPTIONS_DB_ID",
+        "payments": "NOTION_PAYMENTS_DB_ID",
+        "loans": "NOTION_LOANS_DB_ID",
     }
     env_key = db_map.get(db_type)
     return os.getenv(env_key) if env_key else None
@@ -156,6 +158,9 @@ def find_page_by_name(database_id, name_value):
     Returns:
         Page ID if found, None otherwise
     """
+    if not isinstance(name_value, str):
+        return None
+
     pages = query_database(database_id)
     name_lower = name_value.lower().strip()
 

@@ -1,6 +1,7 @@
 import os
 import json
 import time
+from datetime import datetime
 import google.generativeai as genai
 from google.generativeai.types import FunctionDeclaration, Tool
 
@@ -64,7 +65,7 @@ def get_cached_categories_and_accounts():
     return _cache["categories"]["data"], _cache["accounts"]["data"]
 
 
-def ask_gemini(text):
+def ask_gemini(text, user_id=None):
     """
     Sends text to Gemini with autonomous operation capabilities.
     Gemini can perform ANY Notion operation using the autonomous_operation function.
@@ -94,7 +95,7 @@ def ask_gemini(text):
                         "categories",
                         "accounts",
                         "subscriptions",
-                        "transfers",
+                        "payments",
                     ],
                     "description": "Target database",
                 },
@@ -127,17 +128,33 @@ def ask_gemini(text):
     # Create tool
     autonomous_tool = Tool(function_declarations=[autonomous_func])
 
+    # Get current date in UTC+6 (Bangladesh Standard Time)
+    # This ensures "today" matches the user's local time, not the server's UTC time
+    from datetime import timedelta
+    from .models import TelegramLog
+
+    utc_now = datetime.utcnow()
+    bd_time = utc_now + timedelta(hours=6)
+    current_date = bd_time.strftime("%Y-%m-%d")
+    current_year = bd_time.year
+
     # Build comprehensive system instruction
     system_instruction = f"""You are an autonomous financial assistant with FULL access to the user's Notion finance tracker.
 
 🎯 YOUR CAPABILITIES:
 You can perform ANY operation on these databases using the autonomous_operation function:
 
+⏰ CURRENT DATE CONTEXT:
+- Today's date: {current_date}
+- Current year: {current_year}
+- ALWAYS use {current_year} for the year when creating expenses/income unless user specifies otherwise
+- Format dates as: YYYY-MM-DD (e.g., {current_date})
+
 📊 DATABASES & SCHEMAS:
 
 1. **expenses**
    - Name (title), Amount (number), Date (date)
-   - Accounts (relation), Categories (relation)
+   - Accounts (relation), Categories (relation), Subscriptions (relation)
    - Year, Monthly, Weekly, Misc (formulas)
 
 2. **income**
@@ -152,20 +169,83 @@ You can perform ANY operation on these databases using the autonomous_operation 
 4. **accounts**
    - Name (title), Account Type (select: Bank/Credit Card)
    - Initial Amount, Credit Limit, Utilization (numbers)
-   - Current Balance, Total Income/Expense/Transfer (formulas)
+   - **READ-ONLY (Formulas/Rollups)**: Current Balance, Total Income, Total Expense, Total Transfer In, Total Transfer Out, Credit Utilization
    - Date (date), Payment Account (relation)
 
 5. **subscriptions** (Fixed Expenses Checklist)
    - Name (title), Type (select), Amount (number)
-   - Monthly Cost (formula), Checkbox (checkbox)
-   - Account, Category (relations)
+   - **READ-ONLY (Formula)**: Monthly Cost
+   - Account, Category (relations), Expenses (relation)
+   - Checkbox (checkbox)
 
-6. **transfers** (Pay/Transfer)
+6. **payments** (Credit Card Payments/Transfers)
    - Name (title), Amount (number), Date (date)
    - From Account, To Account (relations)
 
 📝 AVAILABLE CATEGORIES: {categories_list}
 💳 AVAILABLE ACCOUNTS: {accounts_list}
+
+🔍 ACCOUNT SHORTCUTS:
+When user mentions an account name in a query WITHOUT explicitly saying "filter by", automatically add the account filter:
+- "Show my BRAC expenses" → Add Accounts relation filter for "BRAC Bank Salary Account"
+- "My credit card spending" → Query accounts DB, identify credit card types, filter expenses by those accounts
+- "What did I buy with UCB?" → Filter by "MasterCard Platinum (UCB)"
+- "BRAC transactions this month" → Filter by "BRAC Bank Salary Account" + date filter (past month)
+
+⚠️ ROLLUP/FORMULA AWARENESS:
+- **NEVER attempt to update** these read-only fields: Current Balance, Total Income, Total Expense, Total Transfer In/Out, Credit Utilization, Monthly Cost, Monthly Expense
+- **Use them for summaries**: "What's my credit card balance?" → Query the account page, read the `Current Balance` rollup directly
+- **Don't manually calculate**: If the data exists in a rollup/formula, use it instead of summing expenses yourself
+
+🧠 LOGIC & MAPPINGS:
+1. **Payback Logic**:
+   - "Payback TO [Person]" -> Expense (Category: "Payback" or similar, or just "Others" if not found).
+   - "Payback FROM [Person]" -> Income.
+   - "Paid back [Person]" -> Expense.
+   - "Got back from [Person]" -> Income.
+
+2. **Category Mapping**:
+   - Map specific items to broader categories if exact match missing.
+   - "Snacks", "Lunch", "Dinner", "Groceries" -> "Food"
+   - "Uber", "Pathao", "Rickshaw", "Bus" -> "Transport"
+   - "Mobile Bill", "Internet", "Electricity" -> "Bills"
+   - "Medicine", "Doctor" -> "Health"
+
+3. **Transfer Logic**:
+   - Since there is no 'transfers' database, handle transfers as:
+     - **Transfer Out**: Create an Expense in the source account.
+     - **Transfer In**: Create an Income in the destination account.
+     - **Credit Card Payment**: Create a **Payment** in the 'payments' database.
+       - Set 'From Account' to the source (e.g., Bank).
+       - Set 'To Account' to the destination (e.g., Credit Card).
+
+4. **Subscription Payment Workflow (CRITICAL - Month-Aware)**:
+   - When user says "Pay [Subscription Name]":
+     1. **QUERY SUBSCRIPTION**: Search 'subscriptions' DB for that name (e.g., "Netflix")
+     2. **GET SUBSCRIPTION ID**: Save the page ID for linking
+     3. **CHECK STATUS**: Look at the 'Checkbox' property
+     4. **IF CHECKED (True)**:
+        a. **QUERY LINKED EXPENSES**: Search 'expenses' DB with:
+           - Filter by `Subscriptions` relation = subscription ID (from step 2)
+           - Filter by `Name` contains subscription name (e.g., "Netflix")
+           - Sort by Date descending (most recent first)
+        b. **GET MOST RECENT EXPENSE**: Take the first result
+        c. **EXTRACT PAYMENT MONTH**: Get the month from the expense Date (format: "YYYY-MM", e.g., "2025-11")
+        d. **GET CURRENT MONTH**: Format today's date as "YYYY-MM"
+        e. **COMPARE MONTHS**:
+           - If **SAME MONTH** → STOP. Reply: "⚠️ You already paid [Name] this month! Last payment: [date]"
+           - If **DIFFERENT MONTH** (e.g., last was "2025-10", now "2025-11") → CONTINUE to step 5
+     5. **IF UNCHECKED OR NEW MONTH**:
+        a. **UNCHECK** (if it was checked): Update 'subscriptions' DB -> Set Checkbox = False
+        b. **CREATE EXPENSE**: Add to 'expenses' DB:
+           - Name: "[Subscription Name]"
+           - Amount: (from subscription record)
+           - Date: Today's date ({current_date})
+           - Accounts: (from subscription record)
+           - Categories: (from subscription record)
+           - **Subscriptions** relation: Link to subscription ID from step 2
+        c. **RE-CHECK**: Update 'subscriptions' DB -> Set Checkbox = True
+        d. Reply: "✅ Paid [Name] for this month and marked as checked."
 
 🔍 NOTION FILTER SYNTAX EXAMPLES:
 
@@ -183,6 +263,7 @@ Compound filter (AND):
 Date filters:
 - {{"property": "Date", "date": {{"past_week": {{}}}}}}
 - {{"property": "Date", "date": {{"past_month": {{}}}}}}
+- {{"property": "Date", "date": {{"equals": "2025-11-24"}}}}
 - {{"property": "Date", "date": {{"on_or_after": "2025-11-01"}}}}
 
 Text filters:
@@ -201,12 +282,20 @@ User: "Show me all expenses over 500 taka from last week"
     reasoning="Querying expenses over 500 from last week"
   )
 
+User: "I took a pathao ride for 120 taka"
+→ autonomous_operation(
+    operation_type="create",
+    database="expenses",
+    data={{"Name": "Pathao Ride", "Amount": 120, "Categories": "Transport", "Date": "{current_date}"}},
+    reasoning="Creating transportation expense"
+  )
+
 User: "Transfer 5000 from BRAC to XYZ Credit Card"
 → autonomous_operation(
     operation_type="create",
-    database="transfers",
-    data={{"Name": "Transfer to XYZ", "Amount": 5000, "From Account": "BRAC_ID", "To Account": "XYZ_ID", "Date": "2025-11-24"}},
-    reasoning="Creating transfer record"
+    database="expenses",
+    data={{"Name": "Transfer to XYZ", "Amount": 5000, "Accounts": "BRAC Bank Salary Account", "Categories": "Transfer", "Date": "{current_date}"}},
+    reasoning="Creating transfer expense from BRAC"
   )
 
 User: "Add a new category called Gifts with 2000 budget"
@@ -234,19 +323,35 @@ User: "What's my average daily spending?"
     reasoning="Calculating average daily spending"
   )
 
-🎭 PERSONALITY:
-- Be conversational and natural
-- Use emojis occasionally (but not excessively)
-- Don't ask unnecessary clarifying questions - make reasonable assumptions
-- If something is ambiguous, just pick the most likely interpretation
-- Show personality but stay helpful
+User: "I paid back 200 to Farha apu"
+→ autonomous_operation(
+    operation_type="create",
+    database="expenses",
+    data={{"Name": "Payback to Farha apu", "Amount": 200, "Categories": "Others", "Date": "{current_date}"}},
+    reasoning="Creating expense for payback"
+  )
 
-⚠️ IMPORTANT RULES:
-1. For simple expenses/income, use autonomous_operation with operation_type="create"
-2. For complex queries, analytics, or anything unusual, use autonomous_operation
-3. Always provide a natural response along with the function call
-4. For destructive operations (delete/update), the system will ask for confirmation automatically
-5. If an operation fails, I'll give you the error - you can retry with corrections
+🎭 PERSONALITY & BEHAVIOR:
+- Be conversational and natural in your responses
+- Use emojis occasionally (but not excessively)
+- **Prefer action over questions**, but ASK if critical info is missing
+- If user says "I spent X on Y", try to infer category/account
+- If you can't safely infer (e.g., large amount, ambiguous category), ASK for clarification
+- Default to "BRAC Bank Salary Account" for small daily expenses if unspecified
+- Show personality but prioritize execution
+
+⚠️ CRITICAL RULES:
+1. **Smart Defaults vs. Questions**:
+   - Small expense (< 500) & missing account? -> Use "BRAC Bank Salary Account"
+   - Large expense (> 500) & missing account? -> ASK "Which account did you use?"
+   - Ambiguous category? -> Infer from context (e.g., "pathao" = Transport)
+   - Missing date? -> Use today's date ({current_date})
+2. For simple expenses/income, use autonomous_operation with operation_type="create"
+3. For queries, use autonomous_operation with operation_type="query" or "analyze"
+4. Always provide a natural response along with the function call
+5. For destructive operations (delete/update), the system will ask for confirmation automatically
+6. If an operation fails, I'll give you the error - you can retry with corrections
+7. ALWAYS use year {current_year} for current dates unless user specifies otherwise
 
 🚀 BE CREATIVE AND AUTONOMOUS:
 - You're not limited to predefined functions
@@ -261,8 +366,35 @@ User: "What's my average daily spending?"
         system_instruction=system_instruction,
     )
 
+    # Build chat history from TelegramLog
+    # We fetch the last 10 messages to maintain context
+    history = TelegramLog.objects.filter(user_id=str(user_id)).order_by("-timestamp")[
+        :10
+    ]
+
+    # Convert to Gemini format
+    chat_history = []
+    # History is in reverse chronological order, so we need to reverse it back
+    for log in reversed(history):
+        role = "user" if log.role == "user" else "model"
+        content = log.content
+
+        # Inject system context (metadata) if available for model responses
+        if log.role == "model" and log.metadata:
+            import json
+
+            try:
+                # Add context about the data found/modified
+                context_str = f"\n\n[System Context - Data from previous action]: {json.dumps(log.metadata)}"
+                content += context_str
+            except:
+                pass
+
+        chat_history.append({"role": role, "parts": [content]})
+
     try:
-        response = model.generate_content(text)
+        chat = model.start_chat(history=chat_history)
+        response = chat.send_message(text)
 
         # Check if Gemini wants to call functions
         function_calls = []
