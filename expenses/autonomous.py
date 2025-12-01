@@ -771,6 +771,7 @@ class SmartExecutor:
             "Repayments": "expenses",
             "Disbursements": "income",
             "Related Account": "accounts",
+            "Loan": "loans",
         }
 
         target_db = relation_map.get(property_name)
