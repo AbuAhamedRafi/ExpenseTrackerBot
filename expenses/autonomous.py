@@ -38,6 +38,7 @@ class SchemaInspector:
     _fallback_schemas = {
         "loans": {
             "Name": "title",
+            "Loan Type": "select",
             "Total Debt Value": "number",
             "Start Date": "date",
             "Lender/Source": "select",
@@ -67,7 +68,6 @@ class SchemaInspector:
             "Amount": "number",
             "Date": "date",
             "Accounts": "relation",
-            "Loan Disbursement": "relation",
             "Related Expense": "relation",
             "Misc": "text",
         },

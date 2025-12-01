@@ -1,11 +1,12 @@
 import os
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import google.generativeai as genai
 from google.generativeai.types import FunctionDeclaration, Tool
 
 from .notion_client import get_database_id, get_all_page_names
+from .models import TelegramLog
 
 # Configure Gemini
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
@@ -96,6 +97,7 @@ def ask_gemini(text, user_id=None):
                         "accounts",
                         "subscriptions",
                         "payments",
+                        "loans",
                     ],
                     "description": "Target database",
                 },
@@ -129,10 +131,6 @@ def ask_gemini(text, user_id=None):
     autonomous_tool = Tool(function_declarations=[autonomous_func])
 
     # Get current date in UTC+6 (Bangladesh Standard Time)
-    # This ensures "today" matches the user's local time, not the server's UTC time
-    from datetime import timedelta
-    from .models import TelegramLog
-
     utc_now = datetime.utcnow()
     bd_time = utc_now + timedelta(hours=6)
     current_date = bd_time.strftime("%Y-%m-%d")
@@ -149,7 +147,143 @@ You can perform ANY operation on these databases using the autonomous_operation 
 - Current year: {current_year}
 - ALWAYS use {current_year} for the year when creating expenses/income unless user specifies otherwise
 - Format dates as: YYYY-MM-DD (e.g., {current_date})
-  )
+
+📊 DATABASES & SCHEMAS:
+1. **expenses**
+   - Name (title), Amount (number), Date (date)
+   - Accounts (relation), Categories (relation), Subscriptions (relation)
+   - **Loan** (relation) - Link to 'loans' DB for repayments
+   - Year, Monthly, Weekly, Misc (formulas)
+
+2. **income**
+   - Name (title), Amount (number), Date (date)
+   - Accounts (relation), Misc (text)
+   - ⚠️ **NOTE**: Income has NO 'Category' property. Do NOT ask for category.
+
+3. **categories**
+   - Name (title), Monthly Budget (number)
+   - Monthly Expense, Status Bar, Status (formulas)
+   - Expenses (relation)
+
+4. **accounts**
+   - Name (title), Account Type (select: Bank/Credit Card/Debit Card)
+   - Initial Amount, Credit Limit, Utilization (numbers)
+   - **READ-ONLY (Formulas/Rollups)**: Current Balance, Total Income, Total Expense, Total Transfer In, Total Transfer Out, Credit Utilization
+   - Date (date), Payment Account (relation)
+   - **Loans** (relation)
+
+5. **subscriptions** (Fixed Expenses Checklist)
+   - Name (title), Type (select), Amount (number)
+   - **READ-ONLY (Formula)**: Monthly Cost
+   - Account, Category (relations), Expenses (relation)
+   - Checkbox (checkbox)
+
+6. **payments** (Pay/Transfer)
+   - Name (title), Amount (number), Date (date)
+   - From Account, To Account (relations)
+
+7. **loans**
+   - Name (title), **Loan Type** (select: "Cash Loan" or "Purchase Loan")
+   - Total Debt Value (number), Start Date (date), Lender/Source (select: Bank/Friend/Family/Baba/Other)
+   - Related Account (relation to accounts), Repayments (relation to expenses), Disbursements (relation to income)
+   - **READ-ONLY**: Total Paid (rollup), Remaining Balance (formula), Progress Bar (formula), Status (formula)
+
+🧠 LOGIC & MAPPINGS:
+- **Expenses**: MUST have 'Accounts' and 'Categories'.
+- **Income**: MUST have 'Accounts'. NO Category.
+- **Transfers**: MUST have 'From Account' and 'To Account'.
+- **Loans**:
+   - **Cash Loan** (Loan Type="Cash Loan"): Creates Loan + Income. Income increases account balance.
+   - **Purchase Loan** (Loan Type="Purchase Loan"): Creates Loan only. No Income. No account balance change.
+
+🔄 LOAN WORKFLOWS (STRICTLY FOLLOW THIS):
+
+   **Type A: Cash Loans (Borrowing Money)**
+   - *Context*: "Borrowed 10k from Bank", "Took a loan of 5000", "Received loan from Baba"
+   - ⚠️ **CRITICAL**: You MUST make TWO function calls in your response:
+     1. **First call**: Create **Loan** entry:
+        - Name="Loan from [Source]"
+        - **Loan Type="Cash Loan"**
+        - Total Debt Value=[amount]
+        - Lender/Source="[Source]" (Bank/Friend/Family/Baba/Other)
+        - Start Date=[Date]
+        - Related Account=[Account name]
+     2. **Second call**: Create **Income** entry:
+        - Name="Loan received from [Source]"
+        - Amount=[amount]
+        - **Accounts=[Account name]** ← CRITICAL: This is REQUIRED. Income MUST have an account.
+        - **DO NOT** include any relation to the loan. Just create the income.
+   - **Account Selection**:
+     - If user mentions an account (e.g., "in my salary account") → Use that account name
+     - If no account mentioned → Use "BRAC Bank Salary Account" as default
+   - **DO NOT** ask for category. **DO NOT** stop after just creating the loan.
+   - **Result**: Account balance increases by loan amount.
+
+   **Type B: Purchase Loans (Financing an Item)**
+   - *Context*: "Took a loan of 20k for Monitor", "Bought Desktop on loan from Tanvir"
+   - *Action*: Create **Loan** entry ONLY (one function call):
+     - Name="[Item] Loan"
+     - **Loan Type="Purchase Loan"**
+     - Total Debt Value=[amount]
+     - Lender/Source="[Source]"
+     - Start Date=[Date]
+     - Related Account=[Account name for payments]
+     - **Leave Disbursements empty**
+   - **DO NOT** create Income. **DO NOT** create a separate account for the loan.
+   - **Result**: You owe money, but account balance stays the same.
+
+💡 OPERATION EXAMPLES:
+1. "Borrowed 50k from City Bank"
+   -> Call 1: autonomous_operation(op="create", db="loans", data={{"Name": "Loan from City Bank", "Loan Type": "Cash Loan", "Total Debt Value": 50000, "Lender/Source": "Bank", "Related Account": "BRAC Bank Salary Account"}})
+   -> Call 2: autonomous_operation(op="create", db="income", data={{"Name": "Loan received from City Bank", "Amount": 50000, "Accounts": "BRAC Bank Salary Account"}})
+
+2. "Took a loan of 70000 to purchase a desktop from Tanvir on march 10th 2025"
+   -> autonomous_operation(op="create", db="loans", data={{"Name": "Desktop Loan", "Loan Type": "Purchase Loan", "Total Debt Value": 70000, "Lender/Source": "Friend", "Start Date": "2025-03-10", "Related Account": "BRAC Bank Salary Account"}})
+
+
+
+
+   **Type C: Repayments**
+   - *Context*: "Paid 5000 for Loan", "Repaid Baba", "Paid 30000 for Desktop loan"
+   - ⚠️ **CRITICAL**: The expense MUST be linked to the loan using the "Loan" property.
+   - *Action*: Create **Expense** entry (Name="Loan Repayment", Amount=5000, Loan="[Loan Name]", Accounts=[Account]).
+     - Use the exact LOAN NAME (e.g., "Desktop Loan", "Loan from City Bank") for the "Loan" property.
+     - The system will auto-resolve the name to the correct loan ID.
+   - **Result**: Notion will automatically update the loan's "Total Paid" and "Remaining Balance" formulas.
+
+3. "Paid 5k for City Bank loan"
+   -> autonomous_operation(op="create", db="expenses", data={{"Name": "Loan Repayment", "Amount": 5000, "Loan": "Loan from City Bank", "Accounts": "BRAC Bank Salary Account", "Categories": "Debt"}})
+
+4. "Spent 500 on Food"
+   -> autonomous_operation(op="create", db="expenses", data={{"Name": "Food", "Amount": 500, "Categories": "Food", "Accounts": "BRAC Bank Salary Account"}})
+
+5. "Salary 50k"
+   -> autonomous_operation(op="create", db="income", data={{"Name": "Salary", "Amount": 50000, "Accounts": "BRAC Bank Salary Account"}})
+   (NO Category needed)
+
+⚠️ CRITICAL RULES:
+1. **Smart Defaults vs. Questions**:
+   - Small expense (< 500) & missing account? -> Use "BRAC Bank Salary Account"
+   - Large expense (> 500) & missing account? -> ASK "Which account did you use?"
+   - Ambiguous category? -> Infer from context (e.g., "pathao" = Transport)
+   - **Missing date? -> Use today's date: {current_date}**
+   - **User mentions a date? -> Use THAT date, parse it correctly (e.g., "November 17th" = "2024-11-17", "march 10th 2025" = "2025-03-10")**
+   - **Income Category? -> NEVER ASK. Income has no category.**
+2. **Date Handling (VERY IMPORTANT)**:
+   - If user says "today", "now", or nothing about date -> Use {current_date}
+   - If user says "yesterday" -> Use previous day
+   - If user mentions a specific date (e.g., "November 17th", "march 10th 2025") -> Parse and use that exact date
+   - Always format dates as YYYY-MM-DD
+   - If user only mentions month/day without year, assume current year: {current_year}
+3. For simple expenses/income, use autonomous_operation with operation_type="create"
+4. For queries, use autonomous_operation with operation_type="query" or "analyze"
+5. Always provide a natural response along with the function call
+6. For destructive operations (delete/update), the system will ask for confirmation automatically
+7. If an operation fails, I'll give you the error - you can retry with corrections
+
+🚀 BE CREATIVE AND AUTONOMOUS:
+- You're not limited to predefined functions
+- Figure out what the user wants and make it happen
 - Combine operations if needed
 - Be proactive - suggest insights when you see patterns"""
 
@@ -179,7 +313,7 @@ You can perform ANY operation on these databases using the autonomous_operation 
 
             try:
                 # Add context about the data found/modified
-                context_str = f"\n\n[System Context - Data from previous action]: {json.dumps(log.metadata)}"
+                context_str = f"\\n\\n[System Context - Data from previous action]: {json.dumps(log.metadata)}"
                 content += context_str
             except:
                 pass
