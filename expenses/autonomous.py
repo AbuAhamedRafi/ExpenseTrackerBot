@@ -289,7 +289,8 @@ class OperationValidator:
         if not data:
             return data
 
-        normalized = data.copy()
+        # Convert to dict to handle MapComposite (Protobuf) types
+        normalized = dict(data)
         schema = SchemaInspector.get_schema(database)
         schema_keys = set(schema.keys())
 
