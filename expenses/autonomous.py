@@ -311,10 +311,26 @@ class OperationValidator:
                 "category": "Categories",
                 "account": "Accounts",
                 "subscription": "Subscriptions",
+                "description": "Name",
+                "title": "Name",
+                "note": "Misc",
+                "comments": "Misc",
             },
             "income": {
                 "account": "Accounts",
                 "disbursement": "Disbursements",
+                "description": "Name",
+                "title": "Name",
+                "note": "Misc",
+                "source": "Name",  # Sometimes used as title
+            },
+            "loans": {
+                "source": "Lender/Source",
+                "lender": "Lender/Source",
+                "amount": "Total Debt Value",
+                "value": "Total Debt Value",
+                "description": "Name",
+                "title": "Name",
             }
         }
 

@@ -112,27 +112,6 @@ def ask_gemini(text, user_id=None):
                     "description": "Page ID for update/delete operations",
                 },
                 "analysis_type": {
-                    "type": "string",
-                    "enum": ["sum", "average", "count"],
-                    "description": "Type of analysis for analyze operations",
-                },
-                "reasoning": {
-                    "type": "string",
-                    "description": "Explain what you're doing and why (for user confirmation)",
-                },
-            },
-            "required": ["operation_type", "database", "reasoning"],
-        },
-    )
-
-    # Create tool
-    autonomous_tool = Tool(function_declarations=[autonomous_func])
-
-    # Get current date in UTC+6 (Bangladesh Standard Time)
-    # This ensures "today" matches the user's local time, not the server's UTC time
-    from datetime import timedelta
-    from .models import TelegramLog
-
     utc_now = datetime.utcnow()
     bd_time = utc_now + timedelta(hours=6)
     current_date = bd_time.strftime("%Y-%m-%d")
