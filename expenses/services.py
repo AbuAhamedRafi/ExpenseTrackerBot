@@ -62,6 +62,25 @@ def get_cached_categories_and_accounts():
             _cache["accounts"]["data"] = ["BRAC Bank Salary Account"]
             _cache["accounts"]["timestamp"] = current_time
 
+    return _cache["categories"]["data"], _cache["accounts"]["data"]
+
+
+def ask_gemini(text, user_id=None):
+    """
+    Sends text to Gemini with autonomous operation capabilities.
+    Gemini can perform ANY Notion operation using the autonomous_operation function.
+    """
+    # Get cached data
+    categories, accounts = get_cached_categories_and_accounts()
+    categories_list = ", ".join([f'"{cat}"' for cat in categories])
+    accounts_list = ", ".join([f'"{acc}"' for acc in accounts])
+
+    # Define the autonomous operation function
+    autonomous_func = FunctionDeclaration(
+        name="autonomous_operation",
+        description="Execute ANY Notion database operation - queries, creates, updates, deletes, transfers, analytics, etc.",
+        parameters={
+            "type": "object",
             "properties": {
                 "operation_type": {
                     "type": "string",
