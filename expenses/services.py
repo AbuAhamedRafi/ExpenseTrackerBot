@@ -256,7 +256,7 @@ def execute_function_calls(function_calls, user_id=None):
 
         except Exception as e:
             results.append(
-                {"function": func_name, "result": {"success": False, "error": str(e)}}
+                {"function": func_name, "result": {"success": False, "message": str(e)}}
             )
 
     return results
