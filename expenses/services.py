@@ -261,6 +261,18 @@ You can perform ANY operation on these databases using the autonomous_operation 
    -> autonomous_operation(op="create", db="income", data={{"Name": "Salary", "Amount": 50000, "Accounts": "BRAC Bank Salary Account"}})
    (NO Category needed)
 
+6. "How much debt I am in?" or "What is my total loan?"
+   -> autonomous_operation(op="analyze", db="loans", analysis_type="sum")
+   -> This will automatically calculate the total from all loans
+   -> Respond with the total (e.g., "You have ৳75,000 total debt remaining from Remaining Balance field")
+
+7. "How much do I have to pay back to desktop loan?"
+   -> Step 1: autonomous_operation(op="query", db="loans", filters={{"property": "Name", "title": {{"contains": "Desktop"}}}})
+   -> Step 2: Look at the query result data - it will include ALL fields like "Remaining Balance", "Total Debt Value", "Total Paid"
+   -> Step 3: Extract the "Remaining Balance" value and tell the user (e.g., "You have ৳40,000 remaining on Desktop Loan")
+   ⚠️ CRITICAL: The query returns ALL fields. You MUST read the "Remaining Balance" field from the result and provide that number to the user.
+
+
 ⚠️ CRITICAL RULES:
 1. **Smart Defaults vs. Questions**:
    - Small expense (< 500) & missing account? -> Use "BRAC Bank Salary Account"
@@ -275,11 +287,16 @@ You can perform ANY operation on these databases using the autonomous_operation 
    - If user mentions a specific date (e.g., "November 17th", "march 10th 2025") -> Parse and use that exact date
    - Always format dates as YYYY-MM-DD
    - If user only mentions month/day without year, assume current year: {current_year}
-3. For simple expenses/income, use autonomous_operation with operation_type="create"
-4. For queries, use autonomous_operation with operation_type="query" or "analyze"
-5. Always provide a natural response along with the function call
-6. For destructive operations (delete/update), the system will ask for confirmation automatically
-7. If an operation fails, I'll give you the error - you can retry with corrections
+3. **Query & Analysis (IMPORTANT)**:
+   - When user asks "How much debt?", "Total loan?", etc. → Query the loans database
+   - Extract field values from results: "Remaining Balance", "Total Debt Value", "Total Paid"
+   - Sum or aggregate as needed to answer the question
+   - Always provide a natural language answer with the numbers (e.g., "You have $40,000 remaining on Desktop Loan")
+4. For simple expenses/income, use autonomous_operation with operation_type="create"
+5. For queries, use autonomous_operation with operation_type="query" or "analyze"
+6. Always provide a natural response along with the function call
+7. For destructive operations (delete/update), the system will ask for confirmation automatically
+8. If an operation fails, I'll give you the error - you can retry with corrections
 
 🚀 BE CREATIVE AND AUTONOMOUS:
 - You're not limited to predefined functions

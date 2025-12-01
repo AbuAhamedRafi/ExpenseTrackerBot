@@ -751,21 +751,27 @@ class SmartExecutor:
 
         results = query_result["data"]
 
+        # Determine which field to analyze based on database
+        if database == "loans":
+            field_name = "Remaining Balance"  # For loans, analyze remaining balance
+        else:
+            field_name = "Amount"  # For expenses/income, analyze amount
+
         # Perform analysis
         if analysis_type == "sum":
-            total = sum(item.get("Amount", 0) for item in results)
+            total = sum(item.get(field_name, 0) or 0 for item in results)
             return {
                 "success": True,
                 "message": f"Total: {total}",
-                "data": {"total": total},
+                "data": {"total": total, "field": field_name},
             }
         elif analysis_type == "average":
-            amounts = [item.get("Amount", 0) for item in results]
-            avg = sum(amounts) / len(amounts) if amounts else 0
+            values = [item.get(field_name, 0) or 0 for item in results]
+            avg = sum(values) / len(values) if values else 0
             return {
                 "success": True,
                 "message": f"Average: {avg:.2f}",
-                "data": {"average": avg},
+                "data": {"average": avg, "field": field_name},
             }
         elif analysis_type == "count":
             return {
