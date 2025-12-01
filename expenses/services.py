@@ -62,25 +62,6 @@ def get_cached_categories_and_accounts():
             _cache["accounts"]["data"] = ["BRAC Bank Salary Account"]
             _cache["accounts"]["timestamp"] = current_time
 
-    return _cache["categories"]["data"], _cache["accounts"]["data"]
-
-
-def ask_gemini(text, user_id=None):
-    """
-    Sends text to Gemini with autonomous operation capabilities.
-    Gemini can perform ANY Notion operation using the autonomous_operation function.
-    """
-    # Get cached data
-    categories, accounts = get_cached_categories_and_accounts()
-    categories_list = ", ".join([f'"{cat}"' for cat in categories])
-    accounts_list = ", ".join([f'"{acc}"' for acc in accounts])
-
-    # Define the autonomous operation function
-    autonomous_func = FunctionDeclaration(
-        name="autonomous_operation",
-        description="Execute ANY Notion database operation - queries, creates, updates, deletes, transfers, analytics, etc.",
-        parameters={
-            "type": "object",
             "properties": {
                 "operation_type": {
                     "type": "string",
@@ -150,32 +131,6 @@ You can perform ANY operation on these databases using the autonomous_operation 
 - ALWAYS use {current_year} for the year when creating expenses/income unless user specifies otherwise
 - Format dates as: YYYY-MM-DD (e.g., {current_date})
   )
-
-🎭 PERSONALITY & BEHAVIOR:
-- Be conversational and natural in your responses
-- Use emojis occasionally (but not excessively)
-- **Prefer action over questions**, but ASK if critical info is missing
-- If user says "I spent X on Y", try to infer category/account
-- If you can't safely infer (e.g., large amount, ambiguous category), ASK for clarification
-- Default to "BRAC Bank Salary Account" for small daily expenses if unspecified
-- Show personality but prioritize execution
-
-⚠️ CRITICAL RULES:
-1. **Smart Defaults vs. Questions**:
-   - Small expense (< 500) & missing account? -> Use "BRAC Bank Salary Account"
-   - Large expense (> 500) & missing account? -> ASK "Which account did you use?"
-   - Ambiguous category? -> Infer from context (e.g., "pathao" = Transport)
-   - Missing date? -> Use today's date ({current_date})
-2. For simple expenses/income, use autonomous_operation with operation_type="create"
-3. For queries, use autonomous_operation with operation_type="query" or "analyze"
-4. Always provide a natural response along with the function call
-5. For destructive operations (delete/update), the system will ask for confirmation automatically
-6. If an operation fails, I'll give you the error - you can retry with corrections
-7. ALWAYS use year {current_year} for current dates unless user specifies otherwise
-
-🚀 BE CREATIVE AND AUTONOMOUS:
-- You're not limited to predefined functions
-- Figure out what the user wants and make it happen
 - Combine operations if needed
 - Be proactive - suggest insights when you see patterns"""
 

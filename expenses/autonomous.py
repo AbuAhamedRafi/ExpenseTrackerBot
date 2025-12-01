@@ -55,8 +55,8 @@ class SchemaInspector:
             "Date": "date",
             "Accounts": "relation",
             "Categories": "relation",
-            "Subscriptions": "relation",
-            "Loan Repayment": "relation",
+            "Categories": "relation",
+            "Loan": "relation",
             "Year": "formula",
             "Monthly": "formula",
             "Weekly": "formula",
@@ -68,6 +68,7 @@ class SchemaInspector:
             "Date": "date",
             "Accounts": "relation",
             "Loan Disbursement": "relation",
+            "Related Expense": "relation",
             "Misc": "text",
         },
         "categories": {
@@ -91,7 +92,8 @@ class SchemaInspector:
             "Credit Utilization": "formula",
             "Date": "date",
             "Payment Account": "relation",
-            "Linked Loans": "relation",
+            "Payment Account": "relation",
+            "Loans": "relation",
             "Utilization": "number",
         },
         "subscriptions": {
@@ -241,6 +243,11 @@ class OperationValidator:
         database = operation["database"]
         op_type = operation["operation_type"]
 
+        # Normalize data keys if present
+        if "data" in operation:
+            operation["data"] = cls._normalize_data_keys(database, operation["data"])
+
+
         # Validate database exists
         if database not in [
             "expenses",
@@ -272,6 +279,64 @@ class OperationValidator:
             return True, ""
 
         return True, ""
+
+    @classmethod
+    def _normalize_data_keys(cls, database: str, data: Dict) -> Dict:
+        """
+        Normalize property names to match schema.
+        Handles common LLM errors like 'type' -> 'Account Type'.
+        """
+        if not data:
+            return data
+
+        normalized = data.copy()
+        schema = SchemaInspector.get_schema(database)
+        schema_keys = set(schema.keys())
+
+        # Common mappings
+        mappings = {
+            "accounts": {
+                "type": "Account Type",
+                "Type": "Account Type",
+                "balance": "Initial Amount",  # Common confusion
+            },
+            "loans": {
+                "source": "Lender/Source",
+                "lender": "Lender/Source",
+                "amount": "Total Debt Value",
+                "value": "Total Debt Value",
+            },
+            "expenses": {
+                "category": "Categories",
+                "account": "Accounts",
+                "subscription": "Subscriptions",
+            },
+            "income": {
+                "account": "Accounts",
+                "disbursement": "Disbursements",
+            }
+        }
+
+        db_mappings = mappings.get(database, {})
+
+        for key in list(normalized.keys()):
+            # If key is already valid, skip
+            if key in schema_keys:
+                continue
+
+            # Check explicit mappings
+            if key.lower() in db_mappings:
+                correct_key = db_mappings[key.lower()]
+                normalized[correct_key] = normalized.pop(key)
+                continue
+            
+            # Check case-insensitive match
+            for schema_key in schema_keys:
+                if key.lower() == schema_key.lower():
+                    normalized[schema_key] = normalized.pop(key)
+                    break
+
+        return normalized
 
     @classmethod
     def _validate_create(cls, database: str, data: Dict) -> Tuple[bool, str]:
@@ -765,9 +830,9 @@ class SmartExecutor:
             "Payment Account": "accounts",
             "Subscriptions": "subscriptions",
             "Expenses": "expenses",
-            "Loan Repayment": "loans",
+            "Loan": "loans",
             "Loan Disbursement": "loans",
-            "Linked Loans": "loans",
+            "Loans": "loans",
             "Repayments": "expenses",
             "Disbursements": "income",
             "Related Account": "accounts",
