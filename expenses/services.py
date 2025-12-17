@@ -306,7 +306,7 @@ You can perform ANY operation on these databases using the autonomous_operation 
 
     # Initialize model
     model = genai.GenerativeModel(
-        "gemini-2.0-flash",
+        "gemini-2.5-flash",
         tools=[autonomous_tool],
         system_instruction=system_instruction,
     )
@@ -363,10 +363,23 @@ You can perform ANY operation on these databases using the autonomous_operation 
         }
 
     except Exception as e:
-        return {
-            "message": f"Oops! Something went wrong: {str(e)}",
-            "function_calls": None,
-        }
+        error_msg = str(e)
+        # Provide user-friendly error messages
+        if "429" in error_msg or "quota" in error_msg.lower():
+            return {
+                "message": "⚠️ AI Assistant Unavailable\n\nThe Gemini API quota has been exceeded. Please try again later or contact the admin to upgrade the API plan.\n\n🔗 Check usage: https://ai.dev/usage",
+                "function_calls": None,
+            }
+        elif "401" in error_msg or "invalid" in error_msg.lower():
+            return {
+                "message": "⚠️ API Configuration Error\n\nThe Gemini API key appears to be invalid. Please contact the admin.",
+                "function_calls": None,
+            }
+        else:
+            return {
+                "message": f"⚠️ Oops! Something went wrong:\n\n{error_msg[:200]}",
+                "function_calls": None,
+            }
 
 
 def execute_function_calls(function_calls, user_id=None):
